@@ -6,27 +6,38 @@
 # using Revise
 using InfiniteOpt, Ipopt, Plots, Distributions, LinearAlgebra
 
-function point_mass_walker()
+const g = 1  # Gravity
+
+function point_mass_walker(;
+        c_fr = 0.05,           # Linear force rate penalty coefficient
+        c_fr2 = 0.01,          # Squared force rate penalty coefficient
+        step_length = nothing, # Step length (default: 2*y_0*sin(α))
+        step_speed = nothing,  # Step speed (default: step_length/1.2)
+        cost_type = :linear    # :linear (work+fr) or :squared (work+fr2)
+    )
     ## 2D Point Mass Walking Model
     model = InfiniteModel(Ipopt.Optimizer)
 
     # Model parameters
-    c_fr = 0.05  # 0.05 creates linear forces. Force rate penalty coefficient
     c_t = 5.0    # Time penalty coefficient
     k_b = 0.0    # Damping coefficient
-    g = 1     # Gravity
     ω0 = 0.3   # angular velocity 0
     # α = 0.35
     @finite_parameter(model,y_0==0.95)  # Initial leg length
     @finite_parameter(model,α==0.35)
-    sl = 2*y_0*sin(α)
+
+    # Step length: use provided value or default
+    sl = isnothing(step_length) ? 2*parameter_value(y_0)*sin(parameter_value(α)) : step_length
+
+    # Step time: derive from step_speed if provided, otherwise default to 1.2
+    t_f_val = isnothing(step_speed) ? 1.2 : sl / step_speed
 
     # Infinite time parameter
     @infinite_parameter(model, τ ∈ [0, 1], num_supports=101, derivative_method = OrthogonalCollocation(2))
 
     # State variables with bounds and initial guesses
-    @variable(model, px, Infinite(τ), start = (t) -> value(sl)*t)  # x position
-    @variable(model, py >= 0.1, Infinite(τ), start = (t) -> value(y_0) + cos(π*t)*.1)  # y position (must be positive)
+    @variable(model, px, Infinite(τ), start = (t) -> sl*t)  # x position
+    @variable(model, py >= 0.1, Infinite(τ), start = (t) -> parameter_value(y_0) + cos(π*t)*.1)  # y position (must be positive)
     @variable(model, vx, Infinite(τ), start = (t) -> 1.0)  # x velocity
     @variable(model, vy, Infinite(τ), start = (t) -> 0.0)  # y velocity
 
@@ -43,7 +54,7 @@ function point_mass_walker()
     # Fixed leg contact positions; contact points are currently [y=0] beginning and end.
     @finite_parameter(model, P_trail_x==0.0)  # Trailing leg x-position
     @finite_parameter(model, P_trail_y==0.0)  # Trailing leg y-position
-    @finite_parameter(model, P_lead_x==value(sl))  # Leading leg x-position
+    @finite_parameter(model, P_lead_x==sl)  # Leading leg x-position
     @finite_parameter(model, P_lead_y==0.0)   # Leading leg y-position
 
     # Leg vectors (from contact points to COM)
@@ -146,8 +157,8 @@ function point_mass_walker()
     @constraint(model, vy(1) == 0)  # Same vertical velocity
 
     # Final conditions (symmetric gait)
-    @constraint(model, px(1) == value(sl))  # One full step
-    @constraint(model, py(1) == value(y_0))  # Same height at end
+    @constraint(model, px(1) == sl)  # One full step
+    @constraint(model, py(1) == parameter_value(y_0))  # Same height at end
     @constraint(model, vx(1) == vx(0))  # Same horizontal velocity
 
     # Force boundary conditions
@@ -156,7 +167,7 @@ function point_mass_walker()
     @constraint(model, Fdot_lead(0) == Fdot_trail(1))
     @constraint(model, Fdot_trail(0) == Fdot_lead(1))
 
-    @constraint(model,t_f == 1.2)
+    @constraint(model, t_f == t_f_val)
 
     # Objective function: minimize work, force rate, and time. 
     # they only get added to the objective 
@@ -166,16 +177,24 @@ function point_mass_walker()
     @expression(model, cost_fr, c_fr*integral(Fddot_trail_p, τ) * t_f +c_fr*integral(Fddot_lead_p,τ)*t_f + 
     c_fr*integral(Fddot_trail_m,τ) * t_f + c_fr*integral(Fddot_lead_m,τ)*t_f)
 
-    @expression(model, cost_fr2, c_fr*integral(Fddot_trail_p.^2,τ) * t_f +c_fr*integral(Fddot_lead_p.^2,τ)*t_f + 
-    c_fr*integral(Fddot_trail_m.^2,τ) * t_f + c_fr*integral(Fddot_lead_m.^2,τ)*t_f)
+    @expression(model, cost_fr2, c_fr2*integral(Fddot_trail_p^2, τ) * t_f + c_fr2*integral(Fddot_lead_p^2, τ)*t_f +
+        c_fr2*integral(Fddot_trail_m^2, τ) * t_f + c_fr2*integral(Fddot_lead_m^2, τ)*t_f)
 
     @expression(model, cost_time, c_t*t_f)
 
-    @objective(model, Min, cost_work+cost_fr)
+    # Set objective based on cost_type
+    if cost_type == :linear
+        @objective(model, Min, cost_work + cost_fr)
+    elseif cost_type == :squared
+        @objective(model, Min, cost_work + cost_fr2)
+    else
+        error("cost_type must be :linear or :squared")
+    end
 
     # Set solver parameters
     set_optimizer_attribute(model, "max_cpu_time", 120.0)
-    set_optimizer_attributes(model, "tol" => 1e-3, "max_iter" => 500)
+    set_optimizer_attribute(model, "tol", 1e-3)
+    set_optimizer_attribute(model, "max_iter", 500)
     # set_optimizer_attribute(model, "nlp_scaling_method", "gradient-based")
     set_optimizer_attribute(model, "warm_start_init_point", "yes")
 
@@ -220,9 +239,105 @@ function plot_results(model)
     return f
 end
 
+## Example: Basic usage
+model = point_mass_walker()
 f = plot_results(model)
 
-# print out the constraints. 
-for con in all_constraints(model)
-             println("$(con): $(value(con))")
+## Example: Accessing model parameters and expressions after solving
+# Use object_dictionary to get all named objects
+o = object_dictionary(model)
+println("Cost work: ", value(o[:cost_work]))
+println("Cost fr (linear): ", value(o[:cost_fr]))
+println("Cost fr2 (squared): ", value(o[:cost_fr2]))
+println("Final time: ", value(o[:t_f]))
+
+## Example: Changing objective and re-solving
+# You can modify the objective using expressions defined in the model:
+# @objective(model, Min, o[:cost_work] + o[:cost_fr2])
+# optimize!(model)
+
+## Parameter sweep across step lengths and speeds
+function run_parameter_sweep()
+    step_lengths = 0.4:0.1:0.8
+    step_speeds = 0.3:0.1:0.7
+
+    # Storage for results
+    results = []
+
+    for sl in step_lengths
+        for ss in step_speeds
+            println("Running: step_length=$sl, step_speed=$ss")
+            try
+                m = point_mass_walker(step_length=sl, step_speed=ss, cost_type=:linear)
+                if termination_status(m) == MOI.LOCALLY_SOLVED || termination_status(m) == MOI.OPTIMAL
+                    o = object_dictionary(m)
+                    push!(results, (
+                        step_length = sl,
+                        step_speed = ss,
+                        cost_work = value(o[:cost_work]),
+                        cost_fr = value(o[:cost_fr]),
+                        cost_fr2 = value(o[:cost_fr2]),
+                        total_cost = objective_value(m)
+                    ))
+                else
+                    println("  Solver did not converge: ", termination_status(m))
+                end
+            catch e
+                println("  Failed: ", e)
+            end
+        end
+    end
+    return results
 end
+
+function plot_sweep_results(results)
+    if isempty(results)
+        println("No valid results to plot")
+        return nothing
+    end
+
+    # Extract data
+    sls = [r.step_length for r in results]
+    sss = [r.step_speed for r in results]
+    costs = [r.total_cost for r in results]
+    works = [r.cost_work for r in results]
+
+    # Get unique values for grid
+    unique_sl = sort(unique(sls))
+    unique_ss = sort(unique(sss))
+
+    # Create matrices for surface/contour plots
+    cost_matrix = fill(NaN, length(unique_ss), length(unique_sl))
+    work_matrix = fill(NaN, length(unique_ss), length(unique_sl))
+
+    for r in results
+        i = findfirst(==(r.step_speed), unique_ss)
+        j = findfirst(==(r.step_length), unique_sl)
+        cost_matrix[i, j] = r.total_cost
+        work_matrix[i, j] = r.cost_work
+    end
+
+    # Create plots
+    p1 = surface(unique_sl, unique_ss, cost_matrix,
+        xlabel="Step Length", ylabel="Step Speed", zlabel="Total Cost",
+        title="Total Cost (Work + Force Rate)", camera=(30, 30))
+
+    p2 = contour(unique_sl, unique_ss, cost_matrix,
+        xlabel="Step Length", ylabel="Step Speed",
+        title="Total Cost Contours", fill=true, levels=20)
+
+    p3 = surface(unique_sl, unique_ss, work_matrix,
+        xlabel="Step Length", ylabel="Step Speed", zlabel="Work Cost",
+        title="Work Cost", camera=(30, 30))
+
+    p4 = contour(unique_sl, unique_ss, work_matrix,
+        xlabel="Step Length", ylabel="Step Speed",
+        title="Work Cost Contours", fill=true, levels=20)
+
+    combined = plot(p1, p2, p3, p4, layout=(2, 2), size=(1000, 800))
+    return combined
+end
+
+# Uncomment to run the parameter sweep:
+# results = run_parameter_sweep()
+# sweep_plot = plot_sweep_results(results)
