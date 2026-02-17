@@ -8,12 +8,54 @@ using InfiniteOpt, Ipopt, Plots, Distributions, LinearAlgebra
 
 const g = 1  # Gravity
 
+"""
+    point_mass_walker(; c_fr=0.05, c_fr2=0.01, step_length=nothing, step_speed=nothing, cost_type=:linear)
+
+Solve the 2D point mass walking optimization problem using InfiniteOpt.
+
+Models a point mass with two leg force actuators (trailing and leading legs) that push
+along the leg direction. Minimizes a cost combining mechanical work and force rate penalties.
+
+# Arguments
+- `c_fr::Float64`: Linear force rate penalty coefficient (default: 0.05)
+- `c_fr2::Float64`: Squared force rate penalty coefficient (default: 0.01)
+- `step_length`: Step length in meters (default: 2*y_0*sin(α) ≈ 0.65)
+- `step_speed`: Step speed in m/s; determines step time as t_f = step_length/step_speed
+                (default: step_length/1.2)
+- `cost_type::Symbol`: Objective function type:
+  - `:linear` → minimize work + c_fr * ∫|F̈|dt
+  - `:squared` → minimize work + c_fr2 * ∫F̈²dt
+
+# Returns
+- `model::InfiniteModel`: The solved optimization model
+
+# Accessing Results
+After solving, use `object_dictionary(model)` to access named variables and expressions:
+```julia
+model = point_mass_walker()
+o = object_dictionary(model)
+value(o[:cost_work])     # Mechanical work cost
+value(o[:px])            # Position x trajectory (array)
+value(o[:F_trail])       # Trailing leg force trajectory
+termination_status(model) # Check solver status
+objective_value(model)    # Total objective value
+```
+
+# Example
+```julia
+# Default parameters
+model = point_mass_walker()
+
+# Custom step with squared force rate penalty
+model = point_mass_walker(step_length=0.5, step_speed=0.6, cost_type=:squared, c_fr2=0.02)
+```
+"""
 function point_mass_walker(;
-        c_fr = 0.05,           # Linear force rate penalty coefficient
-        c_fr2 = 0.01,          # Squared force rate penalty coefficient
-        step_length = nothing, # Step length (default: 2*y_0*sin(α))
-        step_speed = nothing,  # Step speed (default: step_length/1.2)
-        cost_type = :linear    # :linear (work+fr) or :squared (work+fr2)
+        c_fr = 0.05,
+        c_fr2 = 0.01,
+        step_length = nothing,
+        step_speed = nothing,
+        cost_type = :linear
     )
     ## 2D Point Mass Walking Model
     model = InfiniteModel(Ipopt.Optimizer)
@@ -202,7 +244,35 @@ function point_mass_walker(;
     optimize!(model)
     return model
 end
-# plot
+
+"""
+    plot_results(model)
+
+Plot the solution trajectories from a solved walking optimization model.
+
+Creates an 8-subplot figure showing:
+1. COM trajectory (x vs y)
+2. Position vs time (px, py)
+3. Velocity vs time (vx, vy)
+4. Force components vs time (Ftrail_x, Ftrail_y, Flead_x, Flead_y, total FY)
+5. Leg lengths vs time
+6. Force rate (F̈) vs time
+7. Leg lengthening velocity vs time
+8. Dynamics violation (should be near zero)
+
+# Arguments
+- `model::InfiniteModel`: A solved model from `point_mass_walker()`
+
+# Returns
+- `f`: The Plots.jl figure object
+
+# Example
+```julia
+model = point_mass_walker()
+f = plot_results(model)
+savefig(f, "walking_solution.png")
+```
+"""
 function plot_results(model)
     o = object_dictionary(model)
     f = plot(layout = (4,2), size = (800, 800))
@@ -256,19 +326,57 @@ println("Final time: ", value(o[:t_f]))
 # @objective(model, Min, o[:cost_work] + o[:cost_fr2])
 # optimize!(model)
 
-## Parameter sweep across step lengths and speeds
-function run_parameter_sweep()
-    step_lengths = 0.4:0.1:0.8
-    step_speeds = 0.3:0.1:0.7
+"""
+    run_parameter_sweep(; cost_type=:linear, step_lengths=0.4:0.1:0.8, step_speeds=0.3:0.1:0.7, kwargs...)
 
-    # Storage for results
+Run a parameter sweep over step lengths and speeds, solving the walking optimization
+for each combination.
+
+# Arguments
+- `cost_type::Symbol`: Objective type, `:linear` (work + c_fr*|Fddot|) or `:squared` (work + c_fr2*Fddot²)
+- `step_lengths`: Range of step lengths to sweep (default: 0.4:0.1:0.8)
+- `step_speeds`: Range of step speeds to sweep (default: 0.3:0.1:0.7)
+- `kwargs...`: Additional keyword arguments passed to `point_mass_walker()`, e.g.:
+  - `c_fr`: Linear force rate penalty coefficient (default: 0.05)
+  - `c_fr2`: Squared force rate penalty coefficient (default: 0.01)
+
+# Returns
+- `results`: Vector of NamedTuples with cost metrics for each successful solve
+- `models`: 2D Matrix of InfiniteModel objects indexed by [speed_idx, length_idx]
+- `step_speeds`: Vector of step speed values used
+- `step_lengths`: Vector of step length values used
+
+# Examples
+```julia
+# Default sweep with linear cost
+results, models, speeds, lengths = run_parameter_sweep()
+
+# Sweep with squared cost and custom coefficient
+results, models, speeds, lengths = run_parameter_sweep(cost_type=:squared, c_fr2=0.02)
+
+# Custom sweep ranges with modified linear penalty
+results, models, speeds, lengths = run_parameter_sweep(
+    step_lengths=0.5:0.05:0.7,
+    step_speeds=0.4:0.05:0.6,
+    c_fr=0.1
+)
+```
+"""
+function run_parameter_sweep(; cost_type=:linear,
+        step_lengths=0.4:0.1:0.8,
+        step_speeds=0.3:0.1:0.7,
+        kwargs...)
+
+    # Storage for results and models
     results = []
+    # 2D matrix of models indexed by [speed_idx, length_idx]
+    models = Matrix{Union{Nothing, InfiniteModel}}(nothing, length(step_speeds), length(step_lengths))
 
-    for sl in step_lengths
-        for ss in step_speeds
-            println("Running: step_length=$sl, step_speed=$ss")
+    for (j, sl) in enumerate(step_lengths)
+        for (i, ss) in enumerate(step_speeds)
+            println("Running: step_length=$sl, step_speed=$ss, cost_type=$cost_type")
             try
-                m = point_mass_walker(step_length=sl, step_speed=ss, cost_type=:linear)
+                m = point_mass_walker(; step_length=sl, step_speed=ss, cost_type=cost_type, kwargs...)
                 if termination_status(m) == MOI.LOCALLY_SOLVED || termination_status(m) == MOI.OPTIMAL
                     o = object_dictionary(m)
                     push!(results, (
@@ -277,8 +385,10 @@ function run_parameter_sweep()
                         cost_work = value(o[:cost_work]),
                         cost_fr = value(o[:cost_fr]),
                         cost_fr2 = value(o[:cost_fr2]),
-                        total_cost = objective_value(m)
+                        total_cost = objective_value(m),
+                        cost_type = cost_type
                     ))
+                    models[i, j] = m  # Store the model
                 else
                     println("  Solver did not converge: ", termination_status(m))
                 end
@@ -287,57 +397,126 @@ function run_parameter_sweep()
             end
         end
     end
-    return results
+    return results, models, collect(step_speeds), collect(step_lengths)
 end
 
-function plot_sweep_results(results)
+"""
+    plot_sweep_results(results; interactive=true)
+
+Plot the results of a parameter sweep as 3D surfaces and contour plots.
+
+# Arguments
+- `results`: Vector of NamedTuples from `run_parameter_sweep()`
+- `interactive`: If true, attempts to use PlotlyJS backend for interactive 3D rotation
+
+# Returns
+A combined plot with 4 subplots:
+- Top-left: 3D surface of total cost vs (speed, length)
+- Top-right: Contour plot of total cost
+- Bottom-left: 3D surface of work cost vs (speed, length)
+- Bottom-right: Contour plot of work cost
+
+# Example
+```julia
+results, models, speeds, lengths = run_parameter_sweep()
+sweep_plot = plot_sweep_results(results)
+savefig(sweep_plot, "sweep_results.png")
+```
+"""
+function plot_sweep_results(results; interactive=true)
     if isempty(results)
         println("No valid results to plot")
         return nothing
     end
 
+    # Use PlotlyJS backend for interactive 3D rotation (if available)
+    if interactive
+        try
+            plotlyjs()
+        catch
+            println("PlotlyJS not available. Install with: using Pkg; Pkg.add(\"PlotlyJS\")")
+            println("Using default backend (non-interactive 3D)")
+        end
+    end
+
     # Extract data
     sls = [r.step_length for r in results]
     sss = [r.step_speed for r in results]
-    costs = [r.total_cost for r in results]
-    works = [r.cost_work for r in results]
+    cost_type = results[1].cost_type
 
-    # Get unique values for grid
-    unique_sl = sort(unique(sls))
-    unique_ss = sort(unique(sss))
+    # Get unique values for grid (speed on x-axis, length on y-axis)
+    unique_ss = sort(unique(sss))  # x-axis: speed
+    unique_sl = sort(unique(sls))  # y-axis: length
 
     # Create matrices for surface/contour plots
-    cost_matrix = fill(NaN, length(unique_ss), length(unique_sl))
-    work_matrix = fill(NaN, length(unique_ss), length(unique_sl))
+    # Matrix is [y_idx, x_idx] = [length_idx, speed_idx]
+    cost_matrix = fill(NaN, length(unique_sl), length(unique_ss))
+    work_matrix = fill(NaN, length(unique_sl), length(unique_ss))
 
     for r in results
-        i = findfirst(==(r.step_speed), unique_ss)
-        j = findfirst(==(r.step_length), unique_sl)
-        cost_matrix[i, j] = r.total_cost
-        work_matrix[i, j] = r.cost_work
+        i = findfirst(==(r.step_speed), unique_ss)   # x index (speed)
+        j = findfirst(==(r.step_length), unique_sl)  # y index (length)
+        cost_matrix[j, i] = r.total_cost
+        work_matrix[j, i] = r.cost_work
     end
 
-    # Create plots
-    p1 = surface(unique_sl, unique_ss, cost_matrix,
-        xlabel="Step Length", ylabel="Step Speed", zlabel="Total Cost",
-        title="Total Cost (Work + Force Rate)", camera=(30, 30))
+    cost_label = cost_type == :linear ? "Linear" : "Squared"
 
-    p2 = contour(unique_sl, unique_ss, cost_matrix,
-        xlabel="Step Length", ylabel="Step Speed",
-        title="Total Cost Contours", fill=true, levels=20)
+    # Create plots with speed on x-axis, length on y-axis
+    p1 = surface(unique_ss, unique_sl, cost_matrix,
+        xlabel="Step Speed", ylabel="Step Length", zlabel="Total Cost",
+        title="Total Cost ($cost_label)")
 
-    p3 = surface(unique_sl, unique_ss, work_matrix,
-        xlabel="Step Length", ylabel="Step Speed", zlabel="Work Cost",
-        title="Work Cost", camera=(30, 30))
+    p2 = contour(unique_ss, unique_sl, cost_matrix,
+        xlabel="Step Speed", ylabel="Step Length",
+        title="Total Cost Contours ($cost_label)", fill=true, levels=20)
 
-    p4 = contour(unique_sl, unique_ss, work_matrix,
-        xlabel="Step Length", ylabel="Step Speed",
-        title="Work Cost Contours", fill=true, levels=20)
+    p3 = surface(unique_ss, unique_sl, work_matrix,
+        xlabel="Step Speed", ylabel="Step Length", zlabel="Work Cost",
+        title="Work Cost ($cost_label)")
+
+    p4 = contour(unique_ss, unique_sl, work_matrix,
+        xlabel="Step Speed", ylabel="Step Length",
+        title="Work Cost Contours ($cost_label)", fill=true, levels=20)
 
     combined = plot(p1, p2, p3, p4, layout=(2, 2), size=(1000, 800))
     return combined
 end
 
+"""
+    inspect_model(models, step_speeds, step_lengths, speed_idx, length_idx)
+
+Plot time-varying position, velocity, and force for a specific model from the sweep.
+Returns the plot and prints key metrics.
+
+Example:
+    results, models, speeds, lengths = run_parameter_sweep()
+    inspect_model(models, speeds, lengths, 3, 2)  # speed index 3, length index 2
+"""
+function inspect_model(models, step_speeds, step_lengths, speed_idx, length_idx)
+    m = models[speed_idx, length_idx]
+    if isnothing(m)
+        println("No valid model at speed_idx=$speed_idx, length_idx=$length_idx")
+        return nothing
+    end
+
+    ss = step_speeds[speed_idx]
+    sl = step_lengths[length_idx]
+    println("Inspecting model: step_speed=$ss, step_length=$sl")
+
+    o = object_dictionary(m)
+    println("  Cost work: ", round(value(o[:cost_work]), digits=4))
+    println("  Cost fr: ", round(value(o[:cost_fr]), digits=4))
+    println("  Total cost: ", round(objective_value(m), digits=4))
+    println("  t_f: ", round(value(o[:t_f]), digits=4))
+
+    # Use the existing plot_results function
+    return plot_results(m)
+end
+
 # Uncomment to run the parameter sweep:
-# results = run_parameter_sweep()
+# results, models, speeds, lengths = run_parameter_sweep(cost_type=:linear)
 # sweep_plot = plot_sweep_results(results)
+#
+# # Inspect a specific model (e.g., speed index 3, length index 2)
+# inspect_model(models, speeds, lengths, 3, 2)
