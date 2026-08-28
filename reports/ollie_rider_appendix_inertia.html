@@ -1,0 +1,75 @@
+<h2>Appendix 1: board mass and moment of inertia</h2>
+
+<p>The model is nondimensional: board mass <em>m</em><sub>b</sub> = 1, <em>g</em> = 1, length unit <em>L</em> = 0.90 m
+(fully extended leg). The current <code>OllieParams</code> in <code>ollie_hybrid.jl</code> use deck_length 0.80 (0.72 m),
+wheelbase 0.58 (0.52 m), deck_height 0.08 (0.072 m), tail_rise 0.06 (0.054 m) and pitch inertia <em>I</em> = 0.085,
+i.e. <em>I</em><sub>SI</sub> = 0.085 · <em>m</em><sub>b</sub> · <em>L</em><sup>2</sup>. This appendix checks those numbers against a real
+pro setup: Andy Anderson's Powell-Peralta Heron FLIGHT deck (shape 289) on Independent Stage 11 149 trucks
+(the truck spec Powell-Peralta ships on the Andy Anderson 8.45" complete; Anderson himself rides the equivalent
+Mini Logo 8.38" truck, which is ~347 g, so the conclusion is insensitive to the choice).</p>
+
+<h3>Sourced specs</h3>
+<table>
+<tr><th>Item</th><th>Value</th><th>Source</th><th>Note</th></tr>
+<tr><td>Deck length ℓ<sub>d</sub></td><td>31.8 in = 0.808 m</td>
+  <td><a href="https://powell-peralta.com/powell-peralta-pro-andy-anderson-heron-flightr-skateboard-deck-shape-289-8-45-x-31-8">Powell-Peralta shape 289 page</a></td><td>8.45" wide, K20 concave, FLIGHT construction</td></tr>
+<tr><td>Wheelbase <em>w</em></td><td>14.25 in = 0.362 m</td>
+  <td><a href="https://powell-peralta.com/powell-peralta-pro-andy-anderson-heron-flightr-skateboard-deck-shape-289-8-45-x-31-8">same page</a></td><td>nose 6.68", tail 6.68"</td></tr>
+<tr><td>Deck mass <em>m</em><sub>d</sub></td><td><strong>1.15 kg (estimate)</strong></td>
+  <td>7-ply maple deck 1.0–2.2 kg, typical 8.0"×32" 1.10–1.28 kg (<a href="https://weightofstuff.com/what-is-the-weight-of-a-skateboard/">weightofstuff</a>, <a href="https://skateboardsession.com/boards-and-parts/how-much-do-skateboards-weigh/">skateboardsession</a>); FLIGHT decks are 5–10 % lighter than maple (<a href="https://stokedrideshop.com/blogs/buyers-guides/which-one-should-i-buy-powell-peralta-flight-deck-or-traditional-7-ply-maple">Stoked Ride Shop</a>, <a href="https://skateboardershq.com/powell-peralta-flight-deck-review/">SkateboardersHQ</a>)</td>
+  <td>Powell-Peralta does not publish deck mass. Taken as an 8.45" maple deck (~1.25 kg) minus ~8 %.</td></tr>
+<tr><td>Truck mass (each)</td><td>394 g</td>
+  <td><a href="https://skate.am/product/149-stage-11-blackout-standard-trucks-independent/">Independent 149 Stage 11 spec</a> (other listings: 398–401 g, <a href="https://www.playskateshop.com/en/trucks/493-independent-trucks-stage-11-polished-raw-standard-129mm-139mm-144mm-and-149mm.html">Play Skateshop</a>)</td>
+  <td>8.5" axle, 55 mm height. Mini Logo 8.38": 347 g (<a href="https://www.playskateshop.com/en/trucks/1071-mini-logo-trucks-black-raw-low-80-139mm-838-149mm.html">Play Skateshop</a>)</td></tr>
+<tr><td>Wheel mass (each)</td><td>57 g</td>
+  <td><a href="https://weightofstuff.com/what-is-the-weight-of-a-skateboard/">weightofstuff</a>: 54 mm set ≈ 0.5 lb = 227 g / 4</td><td>Bones does not list wheel mass (<a href="https://bones.com/bones-wheels-100-53mm-4pk">Bones 53 mm page</a>)</td></tr>
+<tr><td>Bearing mass (each)</td><td>12 g</td>
+  <td><a href="https://bonesbearings.com/bonesr-redsr-skateboard-bearings-8-pack">Bones Reds</a>; 12–14 g each per <a href="https://weightofstuff.com/what-is-the-weight-of-a-skateboard/">weightofstuff</a></td><td>8 per board ≈ 96 g</td></tr>
+<tr><td>Axle drop below deck mid-plane <em>h</em></td><td>0.061 m (estimate)</td><td>55 mm truck height (<a href="https://skate.am/product/149-stage-11-blackout-standard-trucks-independent/">spec</a>) + ~6 mm half deck thickness</td><td>no risers</td></tr>
+<tr><td>Rider mass</td><td>170 lb = 77.1 kg</td><td>given</td><td></td></tr>
+</table>
+
+<p>Per truck assembly: 394 + 2·57 + 4·12 = <strong>556 g</strong> (hardware, ~50 g per board, and grip tape, ~130 g, are neglected;
+grip tape sits on the deck and would raise <em>m</em><sub>d</sub> by ~10 %).
+Total board: 1.15 + 2·0.556 = <strong>2.26 kg</strong> — essentially the 5 lb (2.27 kg) figure Jeremy assumed.</p>
+
+<h3>Derivation of the pitch inertia about the board COM</h3>
+<p>Deck as a uniform thin rod of length ℓ<sub>d</sub> at <em>y</em> = 0; each truck assembly as a point mass <em>m</em><sub>t</sub> at
+<em>x</em> = ±<em>w</em>/2, <em>y</em> = −<em>h</em>. Total <em>M</em> = <em>m</em><sub>d</sub> + 2<em>m</em><sub>t</sub> = 2.262 kg.</p>
+<table>
+<tr><th>Step</th><th>Expression</th><th>Value</th></tr>
+<tr><td>Combined COM height</td><td><em>y</em><sub>c</sub> = −2<em>m</em><sub>t</sub><em>h</em>/<em>M</em> = −1.112·0.061/2.262</td><td>−0.030 m (3 cm below deck mid-plane)</td></tr>
+<tr><td>Deck rod about own centre</td><td><em>I</em><sub>d</sub> = <em>m</em><sub>d</sub>ℓ<sub>d</sub><sup>2</sup>/12 = 1.15·0.808<sup>2</sup>/12</td><td>0.0626 kg·m<sup>2</sup></td></tr>
+<tr><td>Deck parallel-axis to COM</td><td><em>m</em><sub>d</sub><em>y</em><sub>c</sub><sup>2</sup> = 1.15·0.030<sup>2</sup></td><td>0.0010</td></tr>
+<tr><td>Trucks, horizontal lever</td><td>2<em>m</em><sub>t</sub>(<em>w</em>/2)<sup>2</sup> = 1.112·0.181<sup>2</sup></td><td>0.0364</td></tr>
+<tr><td>Trucks, vertical lever</td><td>2<em>m</em><sub>t</sub>(<em>h</em> − |<em>y</em><sub>c</sub>|)<sup>2</sup> = 1.112·0.031<sup>2</sup></td><td>0.0011</td></tr>
+<tr><td>Wheels' own spin inertia (4 discs, <em>r</em> = 27 mm)</td><td>4·½·0.057·0.027<sup>2</sup></td><td>0.0001 (negligible)</td></tr>
+<tr><td><strong>Total <em>I</em><sub>SI</sub></strong></td><td>sum</td><td><strong>0.101 kg·m<sup>2</sup></strong></td></tr>
+<tr><td><strong>Nondimensional</strong></td><td><em>I</em><sub>SI</sub>/(<em>M L</em><sup>2</sup>) = 0.101/(2.262·0.81)</td><td><strong>0.055</strong></td></tr>
+</table>
+<p><em>Kick-tail correction.</em> The nose and tail (6.68" = 0.17 m each) are bent up by ~18°. Replacing the rod ends with
+inclined segments shortens their horizontal lever by (1 − cos 18°) ≈ 5 % and adds a vertical lever of ≤ 5 cm; the net change
+to <em>I</em><sub>d</sub> is under 3 % and it lowers the total <em>I</em> by roughly 1 %, well inside the uncertainty of <em>m</em><sub>d</sub>.
+The deck contributes ~63 % of <em>I</em> and the trucks ~37 %, so the result is most sensitive to deck mass and length.</p>
+
+<h3>Comparison with the model</h3>
+<p>The model's <em>I</em> = 0.085 corresponds to 0.085·2.26·0.81 = 0.156 kg·m<sup>2</sup>, about 55 % higher than the 0.101 kg·m<sup>2</sup>
+derived here. Part of the gap is the model geometry: its wheelbase (0.52 m) and deck (0.72 m) differ from the real 0.36 m / 0.81 m.
+Repeating the derivation with the <em>model's</em> geometry (rod 0.72 m, trucks at ±0.26 m) gives 0.050 + 0.075 + 0.002 = 0.127 kg·m<sup>2</sup>,
+i.e. <em>I</em> ≈ 0.069 nondimensional. So 0.085 is the right order of magnitude but on the high side either way.</p>
+
+<p><em>Angular momentum used in the model.</em> About the board COM, <em>H</em> = <em>I ω</em> with <em>I</em> = 0.055 (real geometry)
+in units of <em>m</em><sub>b</sub><em>L</em><sup>2</sup>√(<em>g</em>/<em>L</em>). During the tail-on-ground phase the board pivots about the rear
+wheel: <em>I</em><sub>pivot</sub> = <em>I</em> + <em>m</em><sub>b</sub><em>r</em><sup>2</sup>, where <em>r</em> is the COM-to-rear-axle distance,
+<em>r</em><sup>2</sup> = 0.181<sup>2</sup> + 0.031<sup>2</sup> = 0.0338 m<sup>2</sup> (0.0417 nondim). Hence
+<em>I</em><sub>pivot</sub> = 0.101 + 2.262·0.0338 = 0.178 kg·m<sup>2</sup>, or 0.055 + 0.042 = <strong>0.097</strong> nondimensional
+(with the model's wheelbase, <em>r</em><sup>2</sup> = 0.26<sup>2</sup>/0.81 = 0.083, <em>I</em><sub>pivot</sub> ≈ 0.15).</p>
+
+<h3>Recommendation</h3>
+<ul>
+<li>Board mass: <strong>2.26 kg</strong> (deck 1.15 kg est. + 2 × 0.556 kg truck assemblies), matching the assumed 5 lb.</li>
+<li>Mass ratio rider/board: 77.1/2.26 = <strong>34.1</strong>; use <code>rider_mass = 34</code>.</li>
+<li>Pitch inertia about COM: <strong><em>I</em> = 0.055</strong> nondimensional with the real deck/wheelbase; keep
+<strong>0.07</strong> if the current model geometry (wheelbase 0.58, deck 0.80) is retained. The existing 0.085 is ~25–55 % too high
+but not unreasonable given that grip tape, hardware and a heavier maple deck all push it upward.</li>
+</ul>

@@ -1,0 +1,101 @@
+<h2>Appendix 2: force–velocity limit on the legs (after R. McN. Alexander)</h2>
+
+<p>The rider model has one actuator per leg: a push-only force <em>F</em> acting along a telescoping strut
+from the foot to the rider's point mass. By default that force is bounded only by a constant,
+<em>F</em> ≤ <em>F</em><sub>max</sub> = <code>force_limit_bw</code>·<em>M g</em>. That lets the optimiser push at full force
+while the leg is extending at any speed, which no muscle can do. This appendix adds an <strong>opt-in</strong>
+Hill-type force–velocity ceiling in the spirit of Alexander's jumping models
+(<a href="https://doi.org/10.1098/rstb.1990.0044">Alexander 1990, "Optimum take-off techniques for high and long jumps", <i>Phil. Trans. R. Soc. B</i> 329:3–10</a>;
+<a href="https://doi.org/10.1098/rstb.1992.0117">Alexander 1992, "A model of bipedal locomotion on compliant legs", <i>Phil. Trans. R. Soc. B</i> 338:189–198</a>;
+Alexander 1997, "Optimum muscle design for oscillatory activities", <i>J. Theor. Biol.</i> 184:253–259),
+all of which use the <a href="https://doi.org/10.1098/rspb.1938.0050">Hill (1938)</a> hyperbola for the muscle.</p>
+
+<h3>From muscle to leg: why the curve lives on the leg</h3>
+<p>In a real leg the extensor muscles (hip and knee, plus ankle) act through moment arms <em>r</em><sub>j</sub> on
+joints with angular velocities <em>ω</em><sub>j</sub>; Alexander's convention is a single "equivalent muscle"
+whose shortening velocity <em>v</em><sub>m</sub> and force <em>F</em><sub>m</sub> are related to the leg's axial extension rate
+<em>v</em> = dℓ/dt and axial force <em>F</em> through an effective gear ratio <em>ρ</em>(configuration):
+<em>v</em><sub>m</sub> = <em>ρ</em>·<em>v</em>, <em>F</em> = <em>ρ</em>·<em>F</em><sub>m</sub> (power is conserved, <em>F</em><sub>m</sub><em>v</em><sub>m</sub> = <em>F v</em>).
+If <em>ρ</em> is treated as constant over the stroke — the assumption Alexander makes explicitly by
+lumping the leg into one muscle with one effective lever — the Hill hyperbola for the muscle maps
+to a Hill hyperbola for the leg with rescaled parameters <em>F</em><sub>max</sub> = <em>ρ F</em><sub>m,0</sub>,
+<em>v</em><sub>max</sub> = <em>v</em><sub>m,max</sub>/<em>ρ</em>, and the same dimensionless curvature <em>k</em>. So in the telescoping model the
+force–velocity law is a constraint on <strong>leg force versus leg extension rate</strong>; hip and knee are not
+separate actuators here.</p>
+<p>On the question "you'd then be computing hip and joint work but maybe just assume equal parts hip and
+knee?": in this model the constraint is unaffected by that choice. Total leg work is ∫<em>F v</em> dt whatever the
+split. Assuming equal parts hip and knee is a cheap post-hoc attribution: it lets you quote hip work and
+knee work as ½∫<em>F v</em> dt each, and it is consistent with a constant-<em>ρ</em> two-link leg in which both
+joints extend in proportion. What it hides is (i) the real, configuration-dependent gear ratio — a bent knee
+near ℓ/ℓ<sub>max</sub> ≈ 0.6 has a much smaller effective moment arm than a nearly straight one, so the same leg
+force costs far more knee torque; (ii) joint-specific force–velocity limits (the knee extensors saturate at a
+different <em>v</em><sub>m,max</sub> than the hip); and (iii) biarticular energy transfer. If any of those matter, the fix is a
+two-link leg with joint torques, not a different split of the same number.</p>
+
+<h3>The constraint as implemented</h3>
+<p>For each leg, at every force node <em>k</em> of every phase, with <em>u</em> the unit vector from foot to rider and
+<em>v</em> the leg extension rate,</p>
+<pre>v = (v_rider − v_foot) · u
+
+F · (v_max + v / k)  ≤  F_max · (v_max − v)          (Hill, multiplied out — no division)
+v  ≤  v_max
+0  ≤  F  ≤  fv_eccentric_gain · F_max                 (variable bound)</pre>
+<p>For 0 ≤ <em>v</em> ≤ <em>v</em><sub>max</sub> the first line is exactly Hill's
+<em>F</em> ≤ <em>F</em><sub>max</sub>(<em>v</em><sub>max</sub> − <em>v</em>)/(<em>v</em><sub>max</sub> + <em>v</em>/<em>k</em>), i.e. the form
+(<em>F</em> + <em>a</em>)(<em>v</em> + <em>b</em>) = (<em>F</em><sub>0</sub> + <em>a</em>)<em>b</em> with <em>a</em>/<em>F</em><sub>0</sub> = <em>b</em>/<em>v</em><sub>max</sub> = <em>k</em>.
+For <em>v</em> &lt; 0 (leg compressing; the muscle is being stretched) the hyperbola rises above <em>F</em><sub>max</sub>
+and the variable bound takes over — a flat eccentric plateau at <code>fv_eccentric_gain</code>·<em>F</em><sub>max</sub>
+(default 1.0; Alexander used up to about 1.5–1.8 for eccentric force). For <em>v</em> ≤ −<em>k v</em><sub>max</sub> the left side
+is non-positive and the inequality is vacuous, so there is no singularity anywhere. The explicit
+<em>v</em> ≤ <em>v</em><sub>max</sub> line also applies to an unloaded leg (a muscle cannot shorten faster than <em>v</em><sub>max</sub> even at zero
+load); in practice it never binds because the feet stay on the board.</p>
+<p>Foot velocities used for <em>v</em>: <strong>load</strong> phase — tail foot moves with the board, (<em>v</em><sub>b</sub>, 0), and the
+front foot additionally slides along the deck at d<em>s</em>/d<em>t</em> ≈ (<em>s</em><sub>k+1</sub> − <em>s</em><sub>k</sub>)/<em>h</em> (taken as zero on the last
+force node); <strong>pop</strong> phase — the board pivots about the rear wheel, so the COM velocity is (<em>v</em><sub>b</sub>, −<em>X</em><sub>c</sub><em>ω</em>) and a
+deck point <em>r</em> has velocity <em>v</em><sub>COM</sub> + <em>ω</em> × <em>r</em>, plus the slide term rotated into the deck direction for the front foot;
+<strong>flight</strong> — board COM velocity (<em>v</em><sub>b</sub>, <em>v</em><sub>yb</sub>) + <em>ω</em> × <em>r</em>, plus the slide term. The force magnitude
+constrained in flight is the same one the reach complementarity gates: the cone/friction magnitude
+<em>N</em> when <code>flight_force_dir</code> is <code>:cone</code> or <code>:friction</code>, otherwise <em>F</em>. The same kinematics
+is reproduced by <code>leg_extension_rates(sol)</code> for reporting, and <code>audit_rider_ollie</code> now returns
+<code>max_leg_extension_rate</code>.</p>
+
+<h3>Parameter choices</h3>
+<table>
+<tr><th>Option</th><th>Default</th><th>Meaning / source</th></tr>
+<tr><td><code>force_velocity</code></td><td><code>false</code></td><td>Opt-in switch. With it off the model is byte-for-byte the previous one (the force bounds reduce to <em>F</em><sub>max</sub>).</td></tr>
+<tr><td><code>fv_vmax</code></td><td>1.2</td><td>Maximum unloaded leg extension speed, nondimensional. Length unit ℓ<sub>max</sub> = 0.90 m, time unit √(0.90/9.81) = 0.303 s, so one velocity unit is 2.97 m/s. Human leg extension in a maximal jump peaks at roughly 3–4 m/s (Alexander 1990 uses <em>v</em><sub>max</sub> of the equivalent muscle such that the leg extends at a few m/s), which is 1.0–1.3 units; 1.2 ≈ 3.6 m/s was chosen as the mid-to-upper end.</td></tr>
+<tr><td><code>fv_k</code></td><td>0.25</td><td>Hill curvature <em>a</em>/<em>F</em><sub>0</sub> = <em>b</em>/<em>v</em><sub>max</sub>. Hill (1938) found ≈ 0.25 for frog sartorius; Alexander (1990, 1992) writes the hyperbola with <em>G</em> = 1/<em>k</em> and uses <em>G</em> ≈ 4 for fast vertebrate muscle.</td></tr>
+<tr><td><code>fv_eccentric_gain</code></td><td>1.0</td><td>Plateau force while the leg compresses, as a multiple of <em>F</em><sub>max</sub>. 1.0 is the conservative choice; 1.5 approximates the eccentric enhancement in Alexander's models.</td></tr>
+</table>
+
+<h3>Results: same problem with the limit on and off</h3>
+<p>Options: <code>RiderOptions(objective=:lowest_point, tol=1e-4, max_iter=10000, land_matched_velocity=true, land_com_over_trucks=true)</code>,
+<em>F</em><sub>max</sub> = 2 body weights per leg (50 board weights). Nondimensional units; ×0.90 m for heights, ×0.303 s for times, ×2.97 m/s for rates.</p>
+<table>
+<tr><th></th><th><code>force_velocity=false</code></th><th><code>force_velocity=true</code></th></tr>
+<tr><td>Status</td><td>LOCALLY_SOLVED</td><td>LOCALLY_SOLVED</td></tr>
+<tr><td>Lowest-point apex (board underside)</td><td>1.620 (1.46 m)</td><td>0.222 (0.20 m)</td></tr>
+<tr><td>Board COM apex rise</td><td>1.657</td><td>0.350</td></tr>
+<tr><td>T0 / T1 / T2 (load / pop / flight)</td><td>0.645 / 0.211 / 2.799</td><td>1.255 / 0.409 / 0.931</td></tr>
+<tr><td>Peak leg force (board weights; back, front — load / pop / flight)</td><td>50.0 (49.99, 49.94 / 49.94, 6.27 / 39.94, 40.45)</td><td>30.3 (13.79, 17.83 / 30.27, 5.90 / 7.39, 9.29)</td></tr>
+<tr><td>Max leg extension rate (back / front)</td><td>2.88 / 5.79 (8.6 / 17.2 m/s)</td><td>0.585 / 0.461 (1.7 / 1.4 m/s)</td></tr>
+<tr><td>Max <em>F</em>/<em>F</em><sub>Hill</sub>(<em>v</em>) at any node</td><td>≫ 1 (force at full <em>F</em><sub>max</sub> while extending above <em>v</em><sub>max</sub>)</td><td>0.996 / 0.899 (the ceiling is active on the back leg)</td></tr>
+<tr><td>Solve time</td><td>7 s</td><td>30 s</td></tr>
+</table>
+<p>The unconstrained solution is the one the constant-force bound invites: the legs deliver two body weights each
+while extending at up to 17 m/s, giving a 1.5 m ollie. With the Hill ceiling the back leg rides the hyperbola
+(<em>F</em>/<em>F</em><sub>Hill</sub> ≈ 1) at about 1.7 m/s and 0.6 body weights, the pop lengthens from 0.06 s to 0.12 s, and the
+board's lowest point clears 0.20 m — in the range of a real ollie. The two runs are local optima from the same
+initial guess (the staged feasibility solve reports LOCALLY_INFEASIBLE at the fixed guess times with the limit
+on, then recovers in the warm-started stages), so the comparison is of solutions, not of global bounds.</p>
+
+<h3>Note on JuMP versus an "@equation" style</h3>
+<p>Alexander wrote his models as a handful of named equations solved by hand or by simple shooting. In the
+Julia/JuMP formulation the same statements are the macro calls that build the optimisation problem:
+<code>@constraint(model, F*(vmax + v/k) &lt;= Fmax*(vmax - v))</code> is the Hill line above, and
+<code>@expression(model, v, (vxr - vfx)*ux + (vyr - vfy)*uy)</code> would name the extension rate so that it
+can be reused in several constraints or in the objective. Since JuMP 1.x nonlinear expressions are written with
+ordinary operators inside <code>@constraint</code>/<code>@expression</code> (<code>@NLconstraint</code>
+is the legacy spelling); the helper <code>fv!(F, ux, uy, vxr, vyr, vfx, vfy)</code> in <code>ollie_rider.jl</code>
+is a small function that emits both constraint lines for a given leg and node, which plays the role of a
+reusable equation block.</p>
