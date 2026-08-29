@@ -129,6 +129,56 @@ function panel(io, x, y, w, hgt, series, T; title="", yticks=nothing, right_tick
 end
 
 # ------------------------------------------------------------------ per-case HTML
+
+"""Top-down (deck-frame) map of where each foot pushes on the board, all three phases.
+Long axis s → right (nose), lateral σ → up. One dot per node: hue green (start) → red (end) by time,
+brightness ∝ force magnitude (log scale), plus a thin trace of the front foot's path."""
+function footprint_svg(d)
+    L = 0.80; halfw = 0.1175; tail_s = -0.40; tail_sig = 0.0
+    Wp = 640; Hp = 260; sc = 600/1.0; ox = 320; oy = 130
+    X(s) = ox + sc*s; Y(sig) = oy - sc*sig
+    io = IOBuffer()
+    println(io, "<svg xmlns='http://www.w3.org/2000/svg' width='$Wp' height='$Hp' viewBox='0 0 $Wp $Hp' font-family='system-ui,Helvetica,Arial,sans-serif' font-size='11'>")
+    println(io, "<rect width='100%' height='100%' fill='white'/>")
+    println(io, "<rect x='$(X(-L/2))' y='$(Y(halfw))' width='$(sc*L)' height='$(2sc*halfw)' rx='40' fill='#e9e4d8' stroke='#777'/>")
+    for sw in (-0.29, 0.29)   # axles
+        println(io, "<line x1='$(X(sw))' y1='$(Y(0.12))' x2='$(X(sw))' y2='$(Y(-0.12))' stroke='#1261a0' stroke-width='6' opacity='0.5'/>")
+    end
+    println(io, "<line x1='$(X(-L/2))' y1='$(Y(0))' x2='$(X(L/2))' y2='$(Y(0))' stroke='#bbb' stroke-dasharray='3 3'/>")
+    println(io, "<text x='$(X(L/2)+4)' y='$(Y(0)+4)'>nose</text><text x='$(X(-L/2)-30)' y='$(Y(0)+4)'>tail</text><text x='$(X(0))' y='$(Y(halfw)-6)' text-anchor='middle'>σ up = toe side (+); s → nose</text>")
+    # gather (t, s, σ, F) per phase for the front foot, and (t, F) for the back foot
+    ts = vcat(d.t0[1:end-1], d.t1[1:end-1], d.t2[1:end-1]); T0, T1 = ts[1], d.t2[end]
+    sfr = vcat(d.s0, d.s1, d.s2); sgf = vcat(zeros(length(d.s0)), zeros(length(d.s1)), d.sg2)
+    Ffr = vcat(d.Ff0, d.Ff1, d.Nf2); Fbk = vcat(d.Fb0, d.Fb1, d.Nb2)
+    Fmax = max(maximum(Ffr), maximum(Fbk), 1e-9)
+    bright(F) = log10(1+F)/log10(1+Fmax)          # 0..1
+    col(t, F) = begin
+        u = (t-T0)/(T1-T0); r = round(Int, 255*u); g = round(Int, 255*(1-u))
+        m = 0.15 + 0.85*bright(F)                  # blend toward white for weak pushes
+        "rgb($(round(Int, 255-(255-r)*m)),$(round(Int, 255-(255-g)*m)),$(round(Int, 255*(1-m))))"
+    end
+    # front-foot path
+    pts = join(["$(X(sfr[i])),$(Y(sgf[i]))" for i in eachindex(sfr)], " ")
+    println(io, "<polyline points='$pts' fill='none' stroke='#555' stroke-width='1' opacity='0.5'/>")
+    for i in eachindex(sfr)
+        println(io, "<circle cx='$(X(sfr[i]))' cy='$(Y(sgf[i]))' r='$(3+4*bright(Ffr[i]))' fill='$(col(ts[i], Ffr[i]))' opacity='0.85'/>")
+    end
+    # back foot: fixed at the tail; stack the time dots vertically beside it so magnitude/time read
+    for i in eachindex(Fbk)
+        u = (ts[i]-T0)/(T1-T0)
+        println(io, "<circle cx='$(X(tail_s)-14)' cy='$(Y(-0.2)+ -120*u)' r='$(2+3*bright(Fbk[i]))' fill='$(col(ts[i], Fbk[i]))' opacity='0.85'/>")
+    end
+    println(io, "<text x='$(X(tail_s)-14)' y='$(Y(-0.2)+14)' text-anchor='middle' font-size='9'>back foot</text><text x='$(X(tail_s)-14)' y='$(Y(-0.2)+24)' text-anchor='middle' font-size='9'>(time ↑)</text>")
+    # phase boundary markers on the front-foot trace
+    for (tb, lbl) in ((d.t1[1], "pop"), (d.t2[1], "strike"))
+        i = findfirst(>=(tb), ts); i === nothing && continue
+        println(io, "<text x='$(X(sfr[i])+5)' y='$(Y(sgf[i])-5)' font-size='9' fill='#333'>$lbl</text>")
+    end
+    println(io, "<text x='10' y='$(Hp-8)' font-size='10' fill='#555'>colour: green = start → red = end; dot size/brightness ∝ log(1+F), F_max = $(round(Fmax,digits=1)) board weights; axles in blue</text>")
+    println(io, "</svg>")
+    String(take!(io))
+end
+
 function case_html(io, c, tag)
     d = c.d; a = c.a; F = build_frames(d); T = F[end].t
     tbs = [d.t1[1], d.t2[1]]
@@ -217,6 +267,7 @@ function case_html(io, c, tag)
         ("landing v board (x, y, z)", "landing_v_board"), ("landing v rider (x, y, z)", "landing_v_rider"), ("landing COM rel. board (x, y)", "landing_com_rel"),
         ("flight leg work", "flight_leg_work"), ("flight ΔE", "flight_energy_change"), ("flight energy residual (work − ΔE)", "flight_energy_residual"),
         ("semi-implicit gravity bias (explains residual)", "semi_implicit_gravity_bias"), ("angular-momentum residual max", "angular_momentum_residual_max")]
+    println(io, "<h3>Foot-force map on the deck (top-down, deck frame)</h3><p class='small'>Where each foot pushes, over the whole trick. A human kickflip sweeps the front foot forward and off the toe-side edge; check whether the optimizer does the same.</p><figure>", footprint_svg(d), "</figure>")
     println(io, "<h3>Audit summary</h3><table><tr><th>quantity</th><th>value</th></tr>")
     for (lbl, key) in rows_
         k = Symbol(key); val = haskey(a, k) ? fmt(a[k]) : "—"
@@ -335,14 +386,17 @@ In phases 0/1 roll = yaw = 0 and the front foot is on the centreline (σ = 0). I
 <p><b>Reading the animations.</b> Two orthographic views: side view (Y → right, Z up) and an oblique cabinet projection with an axis triad. The deck is drawn as two quads (main deck and tail region) filled dark when the griptape top face is toward the viewer and tan when the underside shows, so a 2π roll reads as dark → tan → dark. Blue circles are the four wheels, the red dot the rider COM, orange/green lines the back and front legs, and the arrows the force each foot applies to the board (solid arrows: $ARROW_LEN length unit = $(round(Int, FORCE_REF)) board weights; dashed arrows in flight: the same force ×10, since flight pushes are only ~1–20 board weights). The five panels below each animation carry a red time cursor synced to the animation.</p>
 <!-- FINDINGS -->
 <h2>Findings</h2>
+<p class='small'>Current settings: per-leg force cap 3 BW (running-peak scale; was 2 BW), front-foot slide speed ≤ 1.5 (≈4.5 m/s), landing |ψ| ≤ 0.1, μ = 0 (normal pushes only).</p>
 <ul>
-<li><b>3-D model reproduces the 2-D ollie.</b> With lateral motion locked (stage 1) the lowest-point apex is 1.802 vs 1.804 in <code>ollie_rider.jl</code>; the board angular-momentum balance (Euler's equations, world frame) closes to machine precision. The flight energy residual (≈4–5) is the semi-implicit Euler gravity bias −½(m+M)g²h² per step (reported as <code>semi_implicit_gravity_bias</code>, ≈2.6 at 61 nodes, 1.4 at 121), the same scheme as the 2-D model — not a physics error.</li>
-<li><b>A kickflip is feasible with normal foot pushes only (μ = 0).</b> Stage 2 (pop frozen to the ollie, flight optimized): LOCALLY_SOLVED, roll exactly 2π, roll rate zero at touchdown, all four wheels down, square (|ψ| ≤ 0.1). The roll torque comes entirely from the front foot's lateral offset on the deck: τ_roll = σ·N, with σ swinging between the two deck edges (±0.117). The "flick" is a ~1–3 board-weight push at the toe-side edge; the "catch" is a 2–3 BW push at the heel-side edge. With I_roll = 0.008 the required angular impulse is tiny (≈0.02–0.05), which is why the flip costs almost nothing: <b>stage 3 (everything free) reaches a lowest-point apex of 1.765 vs 1.802 for the plain ollie (−2 %)</b>, using the identical pop (θ_hit = 0.905, impulse 1.25).</li>
-<li><b>Timing.</b> Stage 3 delays the flick until the board is nearly level near the apex and completes the 2π roll in ≈1 time unit (≈0.3 s) at a peak roll rate of 6.6 rad/unit (≈22 rad/s, ≈3.5 rev/s — within the range of real kickflips). Stage 2, with the pop frozen, flicks right after the tail strike and rolls more slowly (3.9 rad/unit) over most of the flight.</li>
-<li><b>Yaw coupling is real and had to be constrained.</b> Rolling a pitched board makes it yaw through the (I₂−I₁)w₁w₂ Euler term; unconstrained, stage 3 landed 34° off-axis (ψ at its 0.6 bound). A landing constraint |ψ(end)| ≤ 0.1 fixes it at a cost of 0.01 in apex. The rider stays laterally still (34× heavier); the board drifts ≤ 0.2 laterally in stage 2 and ≤ 0.07 in stage 3.</li>
-<li><b>Mesh.</b> Refining the flight from 61 to 121 nodes keeps the stage-2 solution (apex 1.713 → 1.73, roll rate 3.9 → 3.6). The post-strike front-foot push sharpens with the mesh (21 → 38 BW peak): it is impulse-like, and a force-rate weight or a force–velocity limit (Appendix 2 of the ollie report) would regularize it.</li>
-<li><b>What was needed to converge.</b> (i) A roll-target continuation (0.1, 0.25, 0.5, 0.75, 1 turn) — the intermediate targets were themselves locally infeasible but served as a warm-start path; (ii) solving flight-only first with the pop frozen (Jeremy's suggestion), then freeing everything with a full warm start; (iii) locking the lateral DOFs of the ground phases (feet on the centreline give no lateral force, so those directions were flat and made Ipopt's step computation fail); (iv) a cold barrier restart (μ₀ = 0.1, adaptive) also rescued the all-free solve from NUMERICAL_ERROR. Solving all-free from the analytic guess directly did not converge.</li>
-<li><b>Assumptions to revisit.</b> Yaw and roll are locked during the pop (two rear wheels on the ground) without checking the wheel-reaction split; the tail strike is a single vertical impulse at the tail centre; μ = 0 so the feet never drag the board (a real flick uses the toe rolling off the edge — here it is a normal push at the edge); the feet are "attached" to body points during the flip, which is fine for the tail (its height barely changes with roll) but the front foot's world path through the flip is not a foot that has left the board.</li>
+<li><b>3-D model reproduces the 2-D ollie.</b> With lateral motion locked (stage 1) the 3-D solve matches <code>ollie_rider.jl</code> (at 2 BW: 1.802 vs 1.804; at 3 BW: 2.52 vs 2.46–2.55 across the 2-D solve variants); the board angular-momentum balance closes to machine precision. The flight energy residual is the semi-implicit Euler gravity bias −½(m+M)g²h² per step (reported as <code>semi_implicit_gravity_bias</code>), the same scheme as the 2-D model — not a physics error.</li>
+<li><b>A kickflip is feasible with normal foot pushes only (μ = 0), and it is almost free.</b> Stage 2 (pop frozen to the ollie, flight optimized): roll exactly 2π, roll rate zero at touchdown, square landing, lowest-point apex 2.19. Stage 3 (everything free): apex <b>2.47 vs 2.52 for the plain ollie (−2 %)</b>, identical pop. The roll torque is entirely σ·N from the front foot's lateral offset; with I_roll = 0.008 the angular impulse needed is ≈0.03, i.e. a few board-weight·time units of push at the deck edge. The result was the same at 2 BW (1.765 vs 1.802).</li>
+<li><b>Force cap matters a lot for height, not for the flip.</b> Raising the leg cap from 2 to 3 BW lifts the ollie from 1.80 to 2.52 (≈2.3 m) — the model has no force–velocity limit, so height simply scales with the cap (see Appendix 2 of the ollie report: with a Hill limit the ollie collapses to ≈0.2 m). The kickflip's cost relative to the ollie stays ≈2 % either way.</li>
+<li><b>Foot-force map.</b> Without a slide limit the front foot teleported around the deck between pushes (its position is unconstrained while the force is zero). With |ds/dt|, |dσ/dt| ≤ 1.5 the load/pop phase shows the human-like <b>forward sweep</b>: the front foot slides from mid-deck to the nose and arrives there at the tail strike. In flight the flick is a continuous lateral traverse — nose → heel-side edge (catch side) → toe-side edge — rather than a forward flick off the toe edge; that is what a normal-only (μ = 0) foot can do. A toe-drag flick needs μ &gt; 0 and would be the next experiment.</li>
+<li><b>Timing.</b> Stage 3 delays the flick until the board is nearly level, then completes 2π in ≈1 time unit (≈0.3 s) at a peak roll rate of 4.1 rad/unit (≈14 rad/s, ≈2.2 rev/s), inside the range of real kickflips.</li>
+<li><b>Yaw coupling is real and had to be constrained.</b> Rolling a pitched board yaws it through the (I₂−I₁)w₁w₂ Euler term; unconstrained, the all-free solve landed 34° off-axis. |ψ(end)| ≤ 0.1 fixes it for ≈0.01 of apex; yaw still reaches 0.5 rad mid-flight and is steered back by the catch.</li>
+<li><b>Mesh.</b> Refining the flight from 61 to 121 nodes keeps the stage-2 solution (apex 2.19 → 2.17). The post-strike front-foot push sharpens with the mesh (21 → 41 BW peak): it is impulse-like; a force-rate weight or the force–velocity limit would regularize it.</li>
+<li><b>What was needed to converge.</b> (i) Roll-target continuation (0.1 … 0.75 turns; the intermediate targets were locally infeasible but served as a warm-start path); (ii) flight-only with the pop frozen first, then everything free with a full warm start; (iii) locking the flat lateral DOFs of the ground phases (Ipopt's step computation failed otherwise); (iv) continuation in the foot-slide limit (solve at 3.0, tighten to 1.5) — the tight limit from the analytic guess gives NUMERICAL_ERROR; (v) a cold barrier restart (μ₀ = 0.1, adaptive) as a fallback.</li>
+<li><b>Assumptions to revisit.</b> Roll/yaw locked during the pop without checking the wheel-reaction split; tail strike as one vertical impulse at the tail centre; μ = 0 (no toe drag); the feet are attached to body points during the flip; the flight-time bound (4.0) is close to active in the 3 BW ollie (T2 = 3.9).</li>
 </ul>
 """)
 for (i, c) in enumerate(cases)

@@ -154,3 +154,7 @@ with `lateral_ground_locked=true`; if NUMERICAL_ERROR, cold barrier restart (mu_
 Gotcha: changing `Rider3DOptions` fields invalidates the .jls caches (they store `opt`).
 Known gaps: yaw needs `land_yaw_max` (gyroscopic drift lands the board 34° off otherwise); pop
 locks roll/yaw without checking wheel-reaction split; post-strike push sharpens with mesh.
+- 2026-08-28 later: force cap 3 BW (running peak) in both rider models; `foot_slide_max=1.5` front-foot
+  slide limit (needed: without it the foot teleported between pushes; with it the load/pop shows the
+  human forward sweep). Solve loose (3.0) then tighten (1.5) — tight-from-guess fails. Results at 3 BW:
+  ollie 2.52 (2D 2.46), kickflip 2.47 (−2 %). Foot-force map (top-down, deck frame) in the kickflip report.

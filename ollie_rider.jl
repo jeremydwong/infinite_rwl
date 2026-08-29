@@ -27,7 +27,7 @@ Base.@kwdef struct RiderOptions
     rider_mass::Float64 = 34.0        # rider / board mass ratio (170 lb / 5 lb = 77.1 kg / 2.27 kg; see report Appendix 1)
     leg_max::Float64 = 1.0
     leg_min::Float64 = 0.25
-    force_limit_bw::Float64 = 2.0     # per-leg force limit in RIDER BODY WEIGHTS (M g)
+    force_limit_bw::Float64 = 3.0     # per-leg force limit in RIDER BODY WEIGHTS (M g); running peaks ≈ 3 BW
     force_limit::Float64 = NaN        # explicit override in board-weight units; NaN = derived
     n_load::Int = 21
     n_support::Int = 31
@@ -54,6 +54,7 @@ Base.@kwdef struct RiderOptions
     land_matched_velocity::Bool = false # touchdown: rider vx == board vx (ride away together; with vx0=0 both must be 0 by momentum)
     land_com_over_trucks::Bool = false  # touchdown: rider COM x between the rear and front wheel contacts (COP ahead of rear truck)
     foot_margin::Float64 = 0.2
+    foot_slide_max::Float64 = 1.5       # max front-foot sliding speed along the deck |ds/dt| (≈3 m/s); Inf = free
     # Hill-type force–velocity limit on each leg actuator (Alexander 1990/1992), opt-in.
     # Leg extension rate v = dℓ/dt (nondim: length ℓ_max=0.9 m, time √(0.9/9.81)=0.303 s,
     # so 1 velocity unit ≈ 2.97 m/s).  F·(v_max + v/k) <= F_max·(v_max − v), v <= v_max.
@@ -164,6 +165,12 @@ function solve_rider_ollie(; p=ReducedBoardParams(), opt=RiderOptions(), staged=
         fix.(Gbx, 0.0; force=true); fix.(Gfx, 0.0; force=true)
     end
 
+    if isfinite(opt.foot_slide_max)
+        vs = opt.foot_slide_max
+        for k in 1:n0-2; @constraint(model, s0[k+1]-s0[k] <= vs*h0); @constraint(model, s0[k+1]-s0[k] >= -vs*h0); end
+        for k in 1:n1-2; @constraint(model, s1[k+1]-s1[k] <= vs*h1); @constraint(model, s1[k+1]-s1[k] >= -vs*h1); end
+        for k in 1:n2-2; @constraint(model, s2[k+1]-s2[k] <= vs*h2); @constraint(model, s2[k+1]-s2[k] >= -vs*h2); end
+    end
     # ---------------- leg helper ----------------
     # returns (ux, uy, ℓ) for a leg from world foot point (fx,fy) to rider (xr,yr)
     leg(fx,fy,xr,yr) = begin

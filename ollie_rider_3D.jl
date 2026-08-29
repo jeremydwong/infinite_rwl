@@ -55,7 +55,7 @@ Base.@kwdef struct Rider3DOptions
     rider_mass::Float64 = 34.0
     leg_max::Float64 = 1.0
     leg_min::Float64 = 0.25
-    force_limit_bw::Float64 = 2.0
+    force_limit_bw::Float64 = 3.0        # running-peak scale (was 2)
     n_load::Int = 21
     n_support::Int = 31
     n_flight::Int = 81
@@ -66,6 +66,7 @@ Base.@kwdef struct Rider3DOptions
     front_point0::Float64 = 0.29
     rider_clearance::Float64 = 0.15
     foot_margin::Float64 = 0.2
+    foot_slide_max::Float64 = 1.5      # max front-foot sliding speed on the deck |ds/dt|, |dσ/dt| (≈3 m/s); Inf = free
     vy0::Float64 = 0.63                # initial forward rolling speed
     mu::Float64 = 0.0                  # foot–deck friction in flight (0 = normal pushes only)
     force_rate_weight::Float64 = 1e-4
@@ -177,6 +178,12 @@ function solve_rider_3d(; b=Board3D(), opt=Rider3DOptions(), ground=nothing, rol
         fix.(Gb1, 0.0; force=true); fix.(Gb2, 0.0; force=true); fix.(Gf1, 0.0; force=true); fix.(Gf2, 0.0; force=true)
     end
     opt.lateral_free || (fix.(sg2, 0.0; force=true))
+    if isfinite(opt.foot_slide_max)
+        vs = opt.foot_slide_max
+        for k in 1:n0-2; @constraint(model, s0[k+1]-s0[k] <= vs*h0); @constraint(model, s0[k+1]-s0[k] >= -vs*h0); end
+        for k in 1:n1-2; @constraint(model, s1[k+1]-s1[k] <= vs*h1); @constraint(model, s1[k+1]-s1[k] >= -vs*h1); end
+        for k in 1:n2-2; @constraint(model, s2[k+1]-s2[k] <= vs*h2); @constraint(model, s2[k+1]-s2[k] >= -vs*h2); @constraint(model, sg2[k+1]-sg2[k] <= vs*h2); @constraint(model, sg2[k+1]-sg2[k] >= -vs*h2); end
+    end
     if opt.lateral_ground_locked
         for v in (xb0, xr0, vxb0, vxr0, xb1, xr1, vxb1, vxr1); fix.(v, 0.0; force=true); end
     end
@@ -584,7 +591,8 @@ function audit_rider_3d(sol)
        peak_force_ground=maximum(vcat(d.Fb0,d.Ff0,d.Fb1,d.Ff1)), peak_normal_flight=(maximum(d.Nb2), maximum(d.Nf2)),
        sigma_range=extrema(d.sg2), s_range=extrema(d.s2), lateral_board_range=extrema(d.xb2), lateral_rider_range=extrema(d.xr2),
        flight_leg_work=work, flight_energy_change=ΔE, flight_energy_residual=work-ΔE,
-       semi_implicit_gravity_bias=(n2-1)*0.5*(m+M)*g^2*h2^2,   # symplectic-Euler drift −½(m+M)g²h² per step, explains most of the residual angular_momentum_residual_max=Hres_max,
+       semi_implicit_gravity_bias=(n2-1)*0.5*(m+M)*g^2*h2^2,   # symplectic-Euler drift −½(m+M)g²h² per step, explains most of the residual
+       angular_momentum_residual_max=Hres_max,
        landing_v_board=(d.vxb2[end], d.vyb2[end], d.vzb2[end]), landing_v_rider=(d.vxr2[end], d.vyr2[end], d.vzr2[end]),
        landing_com_rel=(d.xr2[end]-d.xb2[end], d.yr2[end]-d.yb2[end]))
 end
