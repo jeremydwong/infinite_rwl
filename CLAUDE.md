@@ -158,3 +158,7 @@ locks roll/yaw without checking wheel-reaction split; post-strike push sharpens 
   slide limit (needed: without it the foot teleported between pushes; with it the load/pop shows the
   human forward sweep). Solve loose (3.0) then tighten (1.5) — tight-from-guess fails. Results at 3 BW:
   ollie 2.52 (2D 2.46), kickflip 2.47 (−2 %). Foot-force map (top-down, deck frame) in the kickflip report.
+- 2026-08-30: force-penalty appendix in kickflip report — pilot sweep shows the ΔF² rate penalty SATURATES
+  (w×1000 → peak N unchanged ≈20.5): the post-strike spike is constraint-driven (frozen pop); fix structurally
+  (ReBULA-style force states with F, Ḟ continuous across the strike, or rate limit, or Hill F–v). Pluto+PlutoUI+
+  IJulia installed; `kickflip_playground.jl` (Pluto): julia --project=. -e 'using Pluto; Pluto.run(notebook="kickflip_playground.jl")'.
