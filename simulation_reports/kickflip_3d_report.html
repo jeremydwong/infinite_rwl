@@ -94,6 +94,49 @@ In phases 0/1 roll = yaw = 0 and the front foot is on the centreline (σ = 0). I
 <p><b>Staging.</b> Stage 1 = the 3-D model run as an ollie with the lateral DOFs locked; it must match the 2-D ollie (lowest-point apex 1.804). Stage 2 = the pop (phases 0, 1 and the tail strike) frozen to stage 1 and only the flight optimized, with the roll target 2π and mu = 0 — only normal pushes at lateral offset σ produce roll torque. Stage 3 = everything free (load, pop and flight optimized together; section present only if <code>kickflip3d_stage3.jls</code> exists).</p>
 <p><b>Reading the animations.</b> Two orthographic views: side view (Y → right, Z up) and an oblique cabinet projection with an axis triad. The deck is drawn as two quads (main deck and tail region) filled dark when the griptape top face is toward the viewer and tan when the underside shows, so a 2π roll reads as dark → tan → dark. Blue circles are the four wheels, the red dot the rider COM, orange/green lines the back and front legs, and the arrows the force each foot applies to the board (solid arrows: 0.5 length unit = 50 board weights; dashed arrows in flight: the same force ×10, since flight pushes are only ~1–20 board weights). The five panels below each animation carry a red time cursor synced to the animation.</p>
 <!-- FINDINGS -->
+
+<h2>Appendix: taming the spastic board contact — candidate force penalties</h2>
+<p>The flight forces are impulse-like (they sharpen under mesh refinement), because the only smoothing is a
+tie-breaker penalty <code>force_rate_weight · Σ(ΔF)²</code> with weight 1e-4, and that sum is not even
+mesh-normalized (Σ(ΔF)² halves when h halves, so refinement <i>weakens</i> the penalty). Candidate fixes, in
+increasing order of physics content — the ReBULA walker (<code>infinite_rebula_simpler.jl</code>) already
+implements the third:</p>
+<table>
+<tr><th>penalty / constraint</th><th>mechanism</th><th>pros</th><th>cons</th></tr>
+<tr><td><b>1. Mesh-normalized rate penalty</b> w·Σ(ΔF)²/h ≈ w·∫Ḟ²dt</td><td>tune w up from 1e-4</td>
+<td>one-line change; sweep below shows it works</td><td>w is arbitrary; trades apex for smoothness with no physical anchor</td></tr>
+<tr><td><b>2. Hard rate limit</b> |Ḟ| ≤ r_max</td><td>like the foot-slide limit; human force-rate ≈ 10 BW / 0.1 s</td>
+<td>physical units, no objective distortion</td><td>bang-bang solutions ride the bound; needs continuation like the slide limit</td></tr>
+<tr><td><b>3. ReBULA-style: force as a C¹ state, penalize ∫F̈²</b> — F, Ḟ become states, F̈ the control (split F̈ = F̈⁺−F̈⁻)</td>
+<td>exactly the walker's <code>c_fr2</code> machinery; forces come out smooth by construction</td>
+<td>proven in this repo; smoothness independent of mesh; c_fr2 already calibrated in the walker (work ≈ fr2 at 5e-5-ish scales)</td>
+<td>2 extra state arrays per leg per phase; boundary conditions for Ḟ at phase joins and the impact need care</td></tr>
+<tr><td><b>4. Activation dynamics</b> τ·Ḟ = u − F (first-order lag, τ ≈ 0.3 nondim ≈ 90 ms)</td>
+<td>muscle-like: the control u is bounded, F must lag it</td><td>physiological; kills impulses harder than 3</td><td>adds stiffness; τ is another parameter</td></tr>
+<tr><td><b>5. Hill force–velocity limit</b> (Appendix 2 of the ollie report, already implemented in 2-D)</td>
+<td>F ≤ F_Hill(dℓ/dt)</td><td>the most physical: fast pushes are weak pushes; also fixes the absolute heights</td>
+<td>collapses apex to realistic ≈0.2 m — changes the trick, not just its smoothness; port to 3-D pending</td></tr>
+</table>
+<p><b>Pilot sweep (option 1)</b>, stage-2 kickflip (pop frozen), <code>force_rate_weight</code> w on the existing
+un-normalized Σ(ΔF)²: </p>
+<table><tr><th>w</th><th>status</th><th>apex</th><th>peak N (back, front)</th><th>∫Ṅ² (both feet)</th></tr>
+<tr><td>1e-4 (default)</td><td>solved</td><td>2.513</td><td>1.34, 21.3</td><td>7436</td></tr>
+<tr><td>1e-2</td><td>solved</td><td>2.191</td><td>0.64, 20.6</td><td>4083</td></tr>
+<tr><td>1e-1</td><td>solved</td><td>2.195</td><td>0.68, 20.5</td><td>4041</td></tr>
+<tr><td>1</td><td>solved</td><td>2.195</td><td>0.71, 20.5</td><td>4041</td></tr>
+<tr><td>10</td><td>solved</td><td>2.195</td><td>0.70, 20.5</td><td>4041</td></tr></table>
+<p><b>Pilot verdict: the rate penalty saturates.</b> Three orders of magnitude of extra weight change neither the
+front-foot spike (≈20.5 BW) nor ∫Ṅ² (≈4040): the spike is <i>constraint-driven</i>, not preference-driven — with
+the pop frozen, the impact hands the flight a state that requires an immediate hard catch push (and costs ≈0.3 of
+apex to smooth what can be smoothed). This is the same lesson as the 2026-07-05 walker log ("the force-rate weight
+is not the culprit"): when a spike survives a 1000× weight increase, look for the constraint that demands it.
+So option 1 alone cannot deliver a realistic contact; the spike must be removed structurally — free the pop
+timing together with the flight, bound the rate (option 2), make force a C¹ state with F(strike⁺) continuity
+(option 3), or cap what a leg can do at speed (option 5).
+<p><b>Recommendation:</b> option 3 for the report solves — with F and Ḟ continuous across the strike so the catch cannot be an impulse — (it is the house style — the walker's force-rate states —
+and makes mesh refinement honest), option 5 when the goal shifts from "does a kickflip exist" to "does a
+<i>human</i> kickflip exist". Options 1–2 are good quick knobs for the Pluto playground.</p>
+
 <h2>Findings</h2>
 <p class='small'>Current settings: per-leg force cap 3 BW (running-peak scale; was 2 BW), front-foot slide speed ≤ 1.5 (≈4.5 m/s), landing |ψ| ≤ 0.1, μ = 0 (normal pushes only).</p>
 <ul>
