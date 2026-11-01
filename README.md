@@ -1,3 +1,32 @@
+# Reaching lectures — *Energy and time is all you need*
+
+Five Pluto notebooks, in `walkthroughs/reaching/`, that build from "how do I write an optimal control problem?"
+to predicting the path, speed profile and duration of human reaches from an energetic cost (mechanical work
+plus the cost of changing force) and a cost of time. Figures and animations are cached, so they appear as soon
+as a notebook opens; each lecture ends with sliders and a **Solve** button for your own runs.
+
+1. **[Optimize at all](walkthroughs/reaching/01_optimize_at_all.jl)** — InfiniteOpt on a point mass:
+   minimum work gives a highway cruise, minimum jerk gives the reach (Flash & Hogan 1985 data, digitized;
+   the variational derivation of minimum jerk).
+2. **[Turning muscle on costs energy](walkthroughs/reaching/02_turning_muscle_on.jl)** — calcium-pumping costs
+   make changing force expensive; joules per force-rate are watts in force-rate-rate; on a two-link arm that
+   energy produces the bell-shaped reach.
+3. **[Pushing on the hand: curl fields](walkthroughs/reaching/03_curl_fields.jl)** — `JᵀF` maps hand forces to
+   joint torques; the curl field does no work, yet the energy optimum uses it to steer.
+4. **[A field built to make curved paths cheap](walkthroughs/reaching/04_kistemaker_field.jl)** — Kistemaker,
+   Wong & Gribble (2010): with force rate counted, the straight reach people made is the energetic optimum.
+5. **[Energy and time is all you need](walkthroughs/reaching/05_energy_and_time.jl)** — with a price on time,
+   duration, speed and shape all follow, and fixing time is the same as pricing it.
+
+```sh
+julia --project=. -e 'using Pluto; Pluto.run(notebook="walkthroughs/reaching/01_optimize_at_all.jl")'
+```
+
+Static HTML copies (figures and animations work without Julia) are in `walkthroughs/reaching/html/`; details,
+model choices and the cache rebuild script are in [walkthroughs/reaching/README.md](walkthroughs/reaching/README.md).
+
+---
+
 # README #
 
 ### Project: Simulations that demonstrate how to perform optimization for human movement experiments. I emphasize solving for movement time as a decision variable, and typically am interested in energy in the objective.
