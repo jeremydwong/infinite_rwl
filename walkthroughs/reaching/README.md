@@ -8,9 +8,10 @@ energetic cost plus a cost of time.
 |---|---|---|
 | 1 | `01_optimize_at_all.jl` | InfiniteOpt anatomy (time, functions of time, dynamics as constraints, BCs, objective) on a point mass. Minimum work = highway (bang–coast–bang); minimum jerk = the reach. Flash & Hogan (1985) Fig. 3b digitized; min-jerk derivation by calculus of variations (collapsible). |
 | 2 | `02_turning_muscle_on.jl` | Calcium-pumping evidence for a cost of changing force; J per force-rate ⇒ W in force-rate-rate; two-link arm with τ̈ as the control and Wong et al. (2021) energy `c_W∫[θ̇τ]₊ + c_t∫[τ̈]₊`. Bell-shaped speed without asking for it. |
-| 3 | `03_curl_fields.jl` | Hand forces into joints with `Jᵀ F`. Energy = work + force-rate with c_t = 0.07. A curl field does no work, yet the energy optimum *rides* it (magnetic-steering arc, R = mv/b, ≈ 10 cm bow; straight +38 %), for every c_t from 0.05 to 0.3; tracking problems (straight, ±5 cm); sensitivity to handle inertia. An honest stress test of the theory. |
+| 3 | `03_curl_fields.jl` | Hand forces into joints with `Jᵀ F`. Built on Mattar & Ostry (2007): 8 directions, 15 cm in 400 ms from shoulder 45° / elbow 90°, clockwise curl b = 15. Energy (work + force rate, c_t = 0.07) bows 1–6 cm *against* the field in every direction (PE at peak speed), straight costs +15 to +118 %; work only bows too (and is multi-modal). People end training ≈ +3–5 mm *with* the field — opposite sign. Bow ∝ distance (5–30 cm), same at 7 start postures and 300–650 ms; 1 kg handle or uncompensated InMotion2 shrink it to 1–3 cm, never straight. Then the 30 cm / 0.65 s version (magnetic-steering arc R = mv/b, ≈ 10 cm bow), tracking, c_t sweep, handle inertia. |
 | 4 | `04_kistemaker_field.jl` | Kistemaker, Wong & Gribble (2010) field at their 400 ms timing, c_t = 0.07. Work + force-rate optimum is straight (0.5 cm); tracking: straight +0.5 %, ±5 cm ≈ +100 %, their ≈ 16 cm minimal-energy path ×5.7. Work-only (joint work) optimum bows only 2.4 cm at 400 ms. |
 | 5 | `05_energy_and_time.jl` | Free duration with `J = E + kT` (k = 25 J/s): duration and peak speed vs distance, scaling argument, and the duality — fixing T is pricing time at k = −dE*/dT. |
+| A | `appendix_eom_mit_robot.jl` | The InMotion2 / MIT-Manus robot coupled at the hand (Wilhelms-Tricarico 2004 Lagrangian and identified c₁–c₃): what the hand feels with the field commanded only, Coriolis-cancelled, or full inertia compensation to isotropic D (report Eq. 16, implemented literally — reproduces the "1 kg at the hand" model exactly). The robot (≈ 1.4–1.8 kg at the hand, more than the arm) cuts the curl-field bow from ≈ 10 cm to 2–5 cm; straight is never optimal; Kistemaker conclusion unchanged. |
 
 ## Running
 
@@ -37,7 +38,7 @@ the code shown is the code that runs.
 ## Rebuilding caches and HTML
 
 ```sh
-julia --project=. walkthroughs/reaching/build_lectures.jl          # all five (≈ 2–4 min from cold caches)
+julia --project=. walkthroughs/reaching/build_lectures.jl          # all lectures + appendix (≈ 2–4 min from cold caches)
 julia --project=. walkthroughs/reaching/build_lectures.jl 3 4      # some
 ```
 
@@ -56,6 +57,8 @@ don't invalidate them — but they also won't notice a model change; delete them
 * Tracking problems constrain the path **shape** (sideways offset vs. progress along the line) inside a
   ±2 mm tube and let the optimizer pick the timing. A position-level *equality* at every collocation
   node is high-index (position is four integrations from τ̈) and Ipopt stalls on it.
+* Curl field (L3): Mattar & Ostry (2007) task — start at shoulder 45°, elbow 90° (hand (−2, 45) cm), 15 cm reaches,
+  T = 0.40 s, b = 15 N·s/m clockwise; curvature = perpendicular error at peak speed, + = right of travel.
 * Kistemaker field: their Eq. 2 with b = 150 N·s/m², 1 kg handle, T = 0.40 s (their Fig. 1B timing).
   Their minimal-energy path is approximated as an offset ∝ λ⁶(1−λ)³ peaking at 16 cm two-thirds of the way.
 * Flash & Hogan data: `data/flash_hogan_1985_fig3b.csv`; the header documents the digitization.

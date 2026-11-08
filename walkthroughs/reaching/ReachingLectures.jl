@@ -35,8 +35,9 @@ using InfiniteOpt, JuMP, Ipopt
 export ArmParams, arm_params, hand_position, elbow_position, hand_jacobian, hand_velocity,
        mass_matrix, coriolis, ik, inverse_dynamics,
        min_jerk, min_jerk_profile, ReachTask, CostWeights, solve_reach, hand_path,
-       curved_path, bow, fit_offset, field_force, cached, cache_path, interp1, load_flash_hogan,
-       arm_animation, point_animation, energy_breakdown, CACHE_DIR, DATA_DIR, PAL, INK, source_excerpt
+       curved_path, bow, fit_offset, field_force, RobotParams, inmotion2_params, robot_ik, robot_position,
+       robot_elbow, robot_jacobian, robot_mass_matrix, robot_coriolis, robot_endpoint_inertia, robot_state, endpoint_inertia, cached, cache_path, interp1, load_flash_hogan,
+       arm_animation, point_animation, energy_breakdown, perp_error, solve_reach_multistart, solve_ok, CACHE_DIR, DATA_DIR, PAL, INK, source_excerpt
 
 const HERE = @__DIR__
 const CACHE_DIR = joinpath(HERE, "cache")
@@ -154,6 +155,77 @@ function field_force(kind::Symbol, x, v; b_curl=13.0, b_kist=150.0, target_y=0.0
     end
 end
 
+# ============================================================== the robot (InMotion2 / MIT-Manus)
+# Wilhelms-Tricarico R (2004) "Methods for compensation of dynamic robot properties", project report.
+# Parallelogram, direct-drive, 2 DOF. Both joint angles are ABSOLUTE (measured from the +x axis),
+# links of length l1 (driven by motor 1) and l3 (driven by motor 2):
+#     handle = base + l1 (cos q1, sin q1) + l3 (cos q2, sin q2)
+# Lagrangian L = ½c1 q̇1² + c2 cos(q1−q2) q̇1 q̇2 + ½c3 q̇2²  ⇒
+#     B(q) q̈ + c(q, q̇) = τ_motor − J_rᵀ h,
+#     B = [c1  c2 cos(q1−q2); c2 cos(q1−q2)  c3],  c = c2 sin(q1−q2) [q̇2²; −q̇1²],
+# where h is the force the robot applies to whatever holds the handle (the hand).
+# (The report measures angles clockwise; the equations have the same form either way.)
+
+"""
+Robot parameters. Defaults: the regression estimates of Wilhelms-Tricarico (2004, §4.2,
+3-parameter column; they include the ≈0.3 kg handle) and the link lengths from the
+manufacturer's table. `base` is the robot's base in OUR coordinates (shoulder at the
+origin) — the report gives no subject placement, so this is an assumption: the robot sits
+across the table, in front of the subject. `elbow = +1/−1` picks the configuration branch.
+"""
+Base.@kwdef struct RobotParams
+    c1::Float64 = 0.3912     # kg m²
+    c2::Float64 = 0.2325     # kg m²
+    c3::Float64 = 0.2266     # kg m²
+    l1::Float64 = 0.4064     # m (16")
+    l3::Float64 = 0.51435    # m (20.25")
+    base::Vector{Float64} = [0.0, 1.0]
+    elbow::Float64 = 1.0
+end
+inmotion2_params(; kw...) = RobotParams(; kw...)
+
+robot_position(r, qr) = [r.base[1] + r.l1*cos(qr[1]) + r.l3*cos(qr[2]),
+                         r.base[2] + r.l1*sin(qr[1]) + r.l3*sin(qr[2])]
+robot_elbow(r, qr) = [r.base[1] + r.l1*cos(qr[1]), r.base[2] + r.l1*sin(qr[1])]
+robot_jacobian(r, qr) = [-r.l1*sin(qr[1])  -r.l3*sin(qr[2]);
+                          r.l1*cos(qr[1])   r.l3*cos(qr[2])]
+"J̇_r q̇_r: the velocity-product part of the handle acceleration."
+robot_jdot_qdot(r, qr, qrd) = [-r.l1*cos(qr[1])*qrd[1]^2 - r.l3*cos(qr[2])*qrd[2]^2,
+                               -r.l1*sin(qr[1])*qrd[1]^2 - r.l3*sin(qr[2])*qrd[2]^2]
+robot_mass_matrix(r, qr) = [r.c1                   r.c2*cos(qr[1] - qr[2]);
+                            r.c2*cos(qr[1] - qr[2])  r.c3]
+robot_coriolis(r, qr, qrd) = [ r.c2*sin(qr[1] - qr[2])*qrd[2]^2,
+                              -r.c2*sin(qr[1] - qr[2])*qrd[1]^2]
+
+"Robot joint angles for a handle position (numbers only; branch set by `r.elbow`)."
+function robot_ik(r, x)
+    d = x .- r.base; dist2 = d[1]^2 + d[2]^2
+    cδ = clamp((dist2 - r.l1^2 - r.l3^2)/(2r.l1*r.l3), -1, 1)
+    δ = r.elbow*acos(cδ)                       # q2 − q1
+    q1 = atan(d[2], d[1]) - atan(r.l3*sin(δ), r.l1 + r.l3*cos(δ))
+    [q1, q1 + δ]
+end
+
+"Robot joint state (q_r, q̇_r, q̈_r) for a handle position, velocity and acceleration (numbers)."
+function robot_state(r, x, v, a)
+    qr = robot_ik(r, x); Jr = robot_jacobian(r, qr)
+    qrd = Jr \ v
+    qrdd = Jr \ (a .- robot_jdot_qdot(r, qr, qrd))
+    (qr=qr, qrd=qrd, qrdd=qrdd)
+end
+
+"The robot's inertia as felt at the handle, M_r = J_r⁻ᵀ B J_r⁻¹ (kg)."
+function robot_endpoint_inertia(r, x)
+    qr = robot_ik(r, x); Ji = inv(robot_jacobian(r, qr))
+    Ji'*robot_mass_matrix(r, qr)*Ji
+end
+
+"The human arm's inertia as felt at the hand, Λ = (J M⁻¹ Jᵀ)⁻¹ (kg)."
+function endpoint_inertia(p, x)
+    q = ik(p, x); J = hand_jacobian(p, q)
+    inv(J*inv(mass_matrix(p, q))*J')
+end
+
 # ============================================================== min jerk
 "Minimum-jerk position fraction: 10s³ − 15s⁴ + 6s⁵ (s = t/T ∈ [0,1])."
 min_jerk(s) = 10s^3 - 15s^4 + 6s^5
@@ -229,6 +301,15 @@ Base.@kwdef struct ReachTask
     m_endpoint::Float64 = 0.0
     track::Any = nothing
     track_tol::Float64 = 0.002   # tube half-width for tracking (m)
+    # the robot (Lecture appendix): :none = ideal (only `field` and an isotropic `m_endpoint`), or
+    # :inmotion2 = the full robot dynamics coupled at the handle, with controller `robot_comp`:
+    #   :none     — motors command the field only, τ_m = J_rᵀ F_field (robot inertia + Coriolis felt)
+    #   :coriolis — Coriolis cancelled, inertia not (report Eq. 13)
+    #   :full     — Coriolis + inertia compensation to an isotropic mass `robot_D` (report Eq. 16)
+    robot::Symbol = :none
+    robot_comp::Symbol = :none
+    robot_D::Float64 = 1.0
+    robot_params::RobotParams = RobotParams()
 end
 
 """
@@ -335,6 +416,9 @@ function solve_reach(task::ReachTask, cost::CostWeights; p=arm_params(), n=61, g
         ah = J*qdd .+ jdot_qdot(p, q, qd)
         F = F .- task.m_endpoint .* ah
     end
+    if task.robot === :inmotion2
+        F = add_robot!(model, s, task, p, q, qd, qdd, xh, vh, J)   # force of the robot on the hand
+    end
     M = mass_matrix(p, q); h = coriolis(p, q, qd); JtF = J'*F
     @constraint(model, [i=1:2], M[i, 1]*qdd[1] + M[i, 2]*qdd[2] + h[i] == τ[i] + JtF[i])
 
@@ -379,6 +463,7 @@ function solve_reach(task::ReachTask, cost::CostWeights; p=arm_params(), n=61, g
         set_start_value_function(wpos[i], sv -> max(0.0, G.qd[i](sv)*G.tau[i](sv)))
         set_start_value_function(upos[i], sv -> max(0.0, G.u[i](sv)))
     end
+    task.robot === :inmotion2 && robot_guess!(model, task, p, G)
 
     tsolve = @elapsed optimize!(model)
     status = string(termination_status(model))
@@ -389,18 +474,84 @@ function solve_reach(task::ReachTask, cost::CostWeights; p=arm_params(), n=61, g
     Tv = free_T ? value(T) : T
     M2(v) = Matrix(hcat(val(v[1]), val(v[2]))')
     Q, QD, QDD, TAU, TAUD, U = M2(q), M2(qd), M2(qdd), M2(τ), M2(τd), M2(u)
+    extra = Dict{String,Any}()
+    if task.robot === :inmotion2
+        extra["F_robot"] = M2(model[:Fh]); extra["qr"] = M2(model[:qr])
+    end
     pack_solution(p, task, cost, Tv, collect(ss), Q, QD, QDD, TAU, TAUD, U;
-                  status=status, objective=objective_value(model), solve_time=tsolve, n=n)
+                  status=status, objective=objective_value(model), solve_time=tsolve, n=n, extra=extra)
+end
+
+"""
+Couple the robot to the hand (handle = hand). Robot joint angles, rates and accelerations
+are ALGEBRAIC variables tied to the hand by the kinematic map at every node (no extra
+differential states, so no index problem); the handle force Fh closes the robot's own
+equation of motion,  B q̈_r + c = τ_m − J_rᵀ Fh,  for the chosen controller τ_m.
+Returns Fh, the force of the robot on the hand, for the arm's equations of motion.
+"""
+function add_robot!(model, s, task, p, q, qd, qdd, xh, vh, J)
+    r = task.robot_params
+    @variable(model, qr[1:2], Infinite(s))       # robot joint angles (absolute)
+    @variable(model, qrd[1:2], Infinite(s))      # … rates
+    @variable(model, qrdd[1:2], Infinite(s))     # … accelerations
+    @variable(model, Fh[1:2], Infinite(s))       # force of the robot on the hand (N) = report's h
+    ah = J*qdd .+ jdot_qdot(p, q, qd)            # hand acceleration
+    Jr = robot_jacobian(r, qr); jdr = robot_jdot_qdot(r, qr, qrd)
+    xr = robot_position(r, qr)
+    @constraint(model, [i=1:2], xr[i] == xh[i])                                  # handle = hand
+    @constraint(model, [i=1:2], Jr[i, 1]*qrd[1] + Jr[i, 2]*qrd[2] == vh[i])       # velocities
+    @constraint(model, [i=1:2], Jr[i, 1]*qrdd[1] + Jr[i, 2]*qrdd[2] + jdr[i] == ah[i])  # accelerations
+    # the field the experimenter commands, computed from the handle's position and velocity
+    Ff = field_force(task.field, xh, vh; b_curl=task.b_curl, b_kist=task.b_kist, target_y=task.target[2])
+    B = robot_mass_matrix(r, qr); c = robot_coriolis(r, qr, qrd); JrT = Jr'
+    if task.robot_comp === :none                   # τ_m = J_rᵀ F_field
+        τm = JrT*Ff
+    elseif task.robot_comp === :coriolis           # τ_m = J_rᵀ F_field + c − B J_r⁻¹ J̇_r q̇_r  (report Eq. 13)
+        @variable(model, z[1:2], Infinite(s))      # z = J_r⁻¹ J̇_r q̇_r
+        @constraint(model, [i=1:2], Jr[i, 1]*z[1] + Jr[i, 2]*z[2] == jdr[i])
+        τm = JrT*Ff .+ c .- B*z
+    elseif task.robot_comp === :full               # report Eq. 54: τ_m = B J_r⁻¹[D⁻¹(F_field − h) − J̇_r q̇_r] + c + J_rᵀ h
+        @variable(model, z[1:2], Infinite(s))      # z = J_r⁻¹[D⁻¹(F_field − h) − J̇_r q̇_r]; h is the MEASURED handle force
+        w = (Ff .- Fh) ./ task.robot_D .- jdr
+        @constraint(model, [i=1:2], Jr[i, 1]*z[1] + Jr[i, 2]*z[2] == w[i])
+        τm = B*z .+ c .+ JrT*Fh
+    else
+        error("unknown robot_comp $(task.robot_comp)")
+    end
+    JrTF = JrT*Fh
+    @constraint(model, [i=1:2], B[i, 1]*qrdd[1] + B[i, 2]*qrdd[2] + c[i] == τm[i] - JrTF[i])
+    collect(Fh)
+end
+
+"Start values for the robot variables, from the arm's initial guess."
+function robot_guess!(model, task, p, G)
+    r = task.robot_params
+    function st(sv)
+        q = [G.q[1](sv), G.q[2](sv)]; qd = [G.qd[1](sv), G.qd[2](sv)]; qdd = [G.qdd[1](sv), G.qdd[2](sv)]
+        x = hand_position(p, q); J = hand_jacobian(p, q)
+        robot_state(r, x, J*qd, J*qdd .+ jdot_qdot(p, q, qd))
+    end
+    for i in 1:2
+        set_start_value_function(model[:qr][i], sv -> st(sv).qr[i])
+        set_start_value_function(model[:qrd][i], sv -> st(sv).qrd[i])
+        set_start_value_function(model[:qrdd][i], sv -> st(sv).qrdd[i])
+    end
 end
 
 "Post-process: hand kinematics, fields, power, and the energy breakdown (plain arrays only)."
-function pack_solution(p, task, cost, T, ss, Q, QD, QDD, TAU, TAUD, U; status="", objective=NaN, solve_time=NaN, n=0)
+function pack_solution(p, task, cost, T, ss, Q, QD, QDD, TAU, TAUD, U; status="", objective=NaN, solve_time=NaN, n=0,
+                       extra=Dict{String,Any}())
     t = T .* ss; nk = length(t)
     X = hcat([hand_position(p, Q[:, k]) for k in 1:nk]...)
     E = hcat([elbow_position(p, Q[:, k]) for k in 1:nk]...)
     V = hcat([hand_velocity(p, Q[:, k], QD[:, k]) for k in 1:nk]...)
     A = hcat([hand_jacobian(p, Q[:, k])*QDD[:, k] .+ jdot_qdot(p, Q[:, k], QD[:, k]) for k in 1:nk]...)
-    Fh = hcat([field_force(task.field, X[:, k], V[:, k]; b_curl=task.b_curl, b_kist=task.b_kist, target_y=task.target[2]) for k in 1:nk]...)
+    # force of the robot on the hand: the commanded field (ideal robot), or the full coupled robot's
+    Fh = haskey(extra, "F_robot") ? extra["F_robot"] :
+         hcat([field_force(task.field, X[:, k], V[:, k]; b_curl=task.b_curl, b_kist=task.b_kist, target_y=task.target[2]) for k in 1:nk]...)
+    if task.m_endpoint > 0 && !haskey(extra, "F_robot")   # include the handle's inertial push in the force on the hand
+        Fh = Fh .- task.m_endpoint .* A
+    end
     P = QD .* TAU                                  # joint power (W)
     eb = energy_breakdown(t, P, U, cost)
     Wext = trapz(t, -sum(Fh .* V, dims=1)[:])      # work the hand does ON the robot (Kistemaker's E_ext)
@@ -412,9 +563,11 @@ function pack_solution(p, task, cost, T, ss, Q, QD, QDD, TAU, TAUD, U; status=""
         "E_work" => eb.E_work, "E_fr" => eb.E_fr, "E" => eb.E, "E_time" => cost.k*T, "J" => eb.E + cost.k*T,
         "W_pos" => eb.W_pos, "FRR_pos" => eb.FRR_pos,
         "task" => (start=task.start, target=task.target, T=task.T, field=task.field, b_curl=task.b_curl,
-                   b_kist=task.b_kist, m_endpoint=task.m_endpoint, tracked=task.track !== nothing),
+                   b_kist=task.b_kist, m_endpoint=task.m_endpoint, tracked=task.track !== nothing,
+                   robot=task.robot, robot_comp=task.robot_comp, robot_D=task.robot_D,
+                   robot_base=task.robot_params.base),
         "cost" => (c_W=cost.c_W, c_t=cost.c_t, k=cost.k, c_frr2=cost.c_frr2, eps=cost.eps),
-    )
+        extra...)
 end
 
 trapz(t, y) = sum((t[k+1] - t[k])*(y[k+1] + y[k])/2 for k in 1:length(t)-1)
@@ -427,6 +580,47 @@ function energy_breakdown(t, P, U, cost)
     Wp = sum(trapz(t, max.(P[i, :], 0)) for i in 1:size(P, 1))
     Fp = sum(trapz(t, max.(U[i, :], 0)) for i in 1:size(U, 1))
     (W_pos=Wp, FRR_pos=Fp, E_work=cost.c_W*Wp, E_fr=cost.c_t*Fp, E=cost.c_W*Wp + cost.c_t*Fp)
+end
+
+# ============================================================== curvature & robust solves
+"""
+    perp_error(sol) -> (pe, max)
+
+Signed perpendicular deviation of the hand from the start→target line (m), POSITIVE to the RIGHT of
+the direction of travel. `pe` is taken at peak hand speed — Mattar & Ostry's (2007) "perpendicular
+error" (PE); `max` is the largest deviation anywhere on the path. In a clockwise curl field the
+field pushes the hand to the right, so an uncompensated reach has PE > 0.
+"""
+function perp_error(sol)
+    st, tg = sol["task"].start, sol["task"].target
+    e = normalize(tg .- st); nr = [e[2], -e[1]]
+    H = sol["hand"]
+    o = [dot(H[:, j] .- st, nr) for j in 1:size(H, 2)]
+    (pe=o[argmax(sol["speed"])], max=o[argmax(abs.(o))])
+end
+
+solve_ok(sol) = sol["status"] in ("LOCALLY_SOLVED", "ALMOST_LOCALLY_SOLVED")
+
+"""
+    solve_reach_multistart(task, cost; bows=(-0.03, 0.03), kw...)
+
+Free optimum from several starting guesses: the default straight-line guess, plus warm starts
+from solutions that track paths bowed by each `bows` (m). Returns the cheapest converged solution
+with `"starts"` = the energies every start reached (identical numbers = a robust optimum).
+"""
+function solve_reach_multistart(task::ReachTask, cost::CostWeights; bows=(-0.03, 0.03), kw...)
+    cands = [solve_reach(task, cost; kw...)]
+    for A in bows
+        tr = ReachTask(start=task.start, target=task.target, T=task.T, T_bounds=task.T_bounds, field=task.field,
+                       b_curl=task.b_curl, b_kist=task.b_kist, m_endpoint=task.m_endpoint, track=bow(A),
+                       robot=task.robot, robot_comp=task.robot_comp, robot_D=task.robot_D, robot_params=task.robot_params)
+        g = solve_reach(tr, cost; kw...)
+        solve_ok(g) && push!(cands, solve_reach(task, cost; guess=g, kw...))
+    end
+    good = filter(solve_ok, cands)
+    best = isempty(good) ? cands[1] : good[argmin([c["E"] for c in good])]
+    best["starts"] = [c["E"] for c in good]
+    best
 end
 
 # ============================================================== caching
@@ -504,6 +698,10 @@ function arm_animation(sols::AbstractVector; labels=["solution $i" for i in 1:le
         d = Dict{String,Any}("label" => labels[i], "color" => colors[mod1(i, length(colors))],
                              "t" => sl["t"], "pts" => hcat(pts...), "speed" => sl["speed"])
         show_force && (d["F"] = sl["F_field"])
+        if haskey(sl, "qr")       # draw the robot too (grey): base → robot elbow → handle
+            r = RobotParams(base=sl["task"].robot_base)
+            d["pts2"] = hcat([vcat(r.base, robot_elbow(r, sl["qr"][:, k]), robot_position(r, sl["qr"][:, k])) for k in 1:nk]...)
+        end
         push!(series, d)
     end
     tg = targets === nothing ? [sols[1]["task"].start, sols[1]["task"].target] : targets
@@ -591,13 +789,14 @@ function _player_html(series, title, targets, xlim, ylim, width; drawlinks=true,
     const tr = s.pts.map(p => X(p[k-2]) + "," + Y(p[k-1])).join(" ");
     el("polyline", {points: tr, fill:"none", stroke:s.color, "stroke-width":1.5, opacity:0.55}, ws);
     el("polyline", {points: s.t.map((t,i) => PX(t) + "," + PY(s.speed[i])).join(" "), fill:"none", stroke:s.color, "stroke-width":2}, sp);
+    const link2 = s.pts2 ? el("polyline", {points:"", fill:"none", stroke:"#9a9890", "stroke-width":4, "stroke-linejoin":"round", opacity:0.55}, ws) : null;
     const link = el("polyline", {points:"", fill:"none", stroke:s.color, "stroke-width":$(drawlinks ? 6 : 0), "stroke-linecap":"round", "stroke-linejoin":"round", opacity:0.8}, ws);
     const arrow = s.F ? el("line", {stroke:s.color, "stroke-width":2.5, "marker-end":"url(#ah$id)"}, ws) : null;
     const dot = el("circle", {r:$(drawlinks ? 5 : 9), fill:s.color, stroke:"#fcfcfb", "stroke-width":2}, ws);
     const cur = el("circle", {r:4.5, fill:s.color, stroke:"#fcfcfb", "stroke-width":2}, sp);
     const lg = document.createElement("span"); lg.innerHTML = '<span style="display:inline-block;width:14px;height:3px;background:'+s.color+';vertical-align:middle;margin-right:5px;"></span>' + s.label;
     root.querySelector(".lg").appendChild(lg);
-    return {s, link, dot, cur, k, arrow};
+    return {s, link, link2, dot, cur, k, arrow};
   });
   if (S.some(s => s.F)){
     const defs = el("defs", {}, ws); const m = el("marker", {id:"ah$id", markerWidth:6, markerHeight:6, refX:5, refY:3, orient:"auto"}, defs);
@@ -614,6 +813,8 @@ function _player_html(series, title, targets, xlim, ylim, width; drawlinks=true,
       const p = it.s.pts[i0].map((v, j) => v*(1-w) + it.s.pts[i1][j]*w);
       let pts = []; for (let j = 0; j < it.k; j += 2) pts.push(X(p[j]) + "," + Y(p[j+1]));
       it.link.setAttribute("points", pts.join(" "));
+      if (it.link2){ const r = it.s.pts2[i0].map((v, j) => v*(1-w) + it.s.pts2[i1][j]*w);
+        it.link2.setAttribute("points", [0,2,4].map(j => X(r[j]) + "," + Y(r[j+1])).join(" ")); }
       const hx = p[it.k-2], hy = p[it.k-1];
       it.dot.setAttribute("cx", X(hx)); it.dot.setAttribute("cy", Y(hy));
       if (it.arrow){ const f0 = it.s.F[i0], f1 = it.s.F[i1]; const fx = f0[0]*(1-w)+f1[0]*w, fy = f0[1]*(1-w)+f1[1]*w;

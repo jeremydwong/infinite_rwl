@@ -13,7 +13,7 @@
 using Pluto
 
 const DIR = @__DIR__
-const LECTURES = sort(filter(f -> occursin(r"^0\d_.*\.jl$", f), readdir(DIR)))
+const LECTURES = sort(filter(f -> occursin(r"^(0\d|appendix)_.*\.jl$", f), readdir(DIR)))
 
 which = isempty(ARGS) ? LECTURES : [l for l in LECTURES if any(a -> startswith(l, lpad(a, 2, '0')), ARGS)]
 session = Pluto.ServerSession()
